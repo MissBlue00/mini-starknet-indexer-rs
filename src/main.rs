@@ -135,21 +135,16 @@ async fn get_contract_abi_handler(Path(contract_address): Path<String>) -> Resul
             if status.is_success() {
                 match response.text().await {
                     Ok(text) => {
-                        println!("RPC Response: {}", text);
                         // Return the raw JSON response
                         Ok(text)
                     }
                     Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             } else {
-                println!("HTTP Error: {}", status);
                 Err(StatusCode::BAD_GATEWAY)
             }
         }
-        Err(e) => {
-            println!("Network Error: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
@@ -280,24 +275,65 @@ fn decode_single_event(
     transaction_hash: &str,
     abi: &serde_json::Value
 ) -> serde_json::Value {
-    // For USDC Transfer event, the data format is:
-    // data[0] = from address
-    // data[1] = to address
-    // data[2] = amount
-    // data[3] = additional data
-    
     let mut decoded_data = serde_json::Map::new();
     
-    if data.len() >= 3 {
-        decoded_data.insert("event_type".to_string(), serde_json::Value::String("Transfer".to_string()));
-        decoded_data.insert("from".to_string(), data[0].clone());
-        decoded_data.insert("to".to_string(), data[1].clone());
-        decoded_data.insert("value".to_string(), data[2].clone());
-        decoded_data.insert("block_number".to_string(), serde_json::Value::Number(serde_json::Number::from(block_number)));
-        decoded_data.insert("transaction_hash".to_string(), serde_json::Value::String(transaction_hash.to_string()));
+    // Try to find the event name and structure from ABI based on the first key (event signature)
+    let (event_name, field_names) = if let Some(first_key) = keys.first() {
+        if let Some(key_str) = first_key.as_str() {
+            find_event_info_from_abi(key_str, abi)
+        } else {
+            ("Unknown".to_string(), Vec::new())
+        }
+    } else {
+        ("Unknown".to_string(), Vec::new())
+    };
+    
+    decoded_data.insert("event_type".to_string(), serde_json::Value::String(event_name));
+    decoded_data.insert("block_number".to_string(), serde_json::Value::Number(serde_json::Number::from(block_number)));
+    decoded_data.insert("transaction_hash".to_string(), serde_json::Value::String(transaction_hash.to_string()));
+    
+    // Map data to field names from ABI
+    for (index, value) in data.iter().enumerate() {
+        let field_name = if index < field_names.len() {
+            field_names[index].clone()
+        } else {
+            format!("param_{}", index)
+        };
+        decoded_data.insert(field_name, value.clone());
     }
     
     serde_json::Value::Object(decoded_data)
+}
+
+fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> (String, Vec<String>) {
+    // Look for events in the ABI - the ABI is directly an array, not nested under "result"
+    if let Some(abi_array) = abi.as_array() {
+        for abi_item in abi_array {
+            if let Some(item_type) = abi_item.get("type").and_then(|t| t.as_str()) {
+                if item_type == "event" {
+                    if let Some(name) = abi_item.get("name").and_then(|n| n.as_str()) {
+                        // Extract field names from the event members
+                        let mut field_names = Vec::new();
+                        if let Some(members) = abi_item.get("members").and_then(|m| m.as_array()) {
+                            for member in members {
+                                if let Some(member_name) = member.get("name").and_then(|n| n.as_str()) {
+                                    field_names.push(member_name.to_string());
+                                }
+                            }
+                        }
+                        
+                        // For now, return the first Transfer event we find
+                        if name.contains("Transfer") {
+                            return (name.to_string(), field_names);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback for Transfer event
+    ("Transfer".to_string(), vec!["from".to_string(), "to".to_string(), "value".to_string()])
 }
 
 #[tokio::main]
