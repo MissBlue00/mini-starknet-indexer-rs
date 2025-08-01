@@ -163,7 +163,7 @@ async fn fetch_starknet_events_handler(
         (req.address, req.chunk_size)
     } else {
         // Use default values if no JSON body provided
-        let address = "0x04270219d365d6b017231b52e92b3fb5d7c8378b05e9abc97724537a80e93b0f"; // USDC contract
+        let address = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"; // STRK contract
         let chunk_size = 10;
         (address.to_string(), chunk_size)
     };
