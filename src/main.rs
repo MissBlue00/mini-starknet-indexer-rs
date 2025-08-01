@@ -1,5 +1,6 @@
 use axum::{
     routing::{get, post},
+    routing::{get, post},
     Router,
     Json,
     http::StatusCode,
@@ -7,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use reqwest::Client;
 use reqwest::Client;
 
 #[derive(Serialize, Deserialize)]
@@ -357,6 +359,7 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
 #[tokio::main]
 async fn main() {
     // Build our application with routes
+    // Build our application with routes
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/test", get(test_json_handler))
@@ -365,7 +368,7 @@ async fn main() {
 
     // Run it
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("🚀 Server starting on {}", addr);
+    println!("Server running on {}", addr);
     
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
