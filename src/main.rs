@@ -1,6 +1,5 @@
 use axum::{
     routing::{get, post},
-    routing::{get, post},
     Router,
     Json,
     http::StatusCode,
@@ -8,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use reqwest::Client;
 use reqwest::Client;
 
 #[derive(Serialize, Deserialize)]
