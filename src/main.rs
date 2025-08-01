@@ -342,8 +342,11 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
                             }
                         }
                         
+                        // Extract just the event name (last part after the last "::")
+                        let event_name = name.split("::").last().unwrap_or(name).to_string();
+                        
                         // Return the first event we find (Transfer, Swap, etc.)
-                        return (name.to_string(), field_names);
+                        return (event_name, field_names);
                     }
                 }
             }
