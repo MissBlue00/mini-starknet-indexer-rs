@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::env;
 use reqwest::Client;
 
 #[derive(Serialize, Deserialize)]
@@ -102,15 +103,10 @@ struct DecodedEvent {
     transaction_hash: String,
 }
 
-async fn root_handler() -> Json<MockResponse> {
-    Json(MockResponse {
-        status: "ok".to_string(),
-        data: "mock".to_string(),
-    })
-}
+
 
 async fn get_contract_abi_handler(Path(contract_address): Path<String>) -> Result<String, StatusCode> {
-    let rpc_url = "https://starknet-mainnet.public.blastapi.io";
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "https://starknet-mainnet.public.blastapi.io".to_string());
     
     let rpc_request = serde_json::json!({
         "jsonrpc": "2.0",
@@ -163,12 +159,12 @@ async fn fetch_starknet_events_handler(
         (req.address, req.chunk_size)
     } else {
         // Use default values if no JSON body provided
-        let address = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"; // STRK contract
+        let address = env::var("CONTRACT_ADDRESS").unwrap_or_else(|_| "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d".to_string());
         let chunk_size = 10;
-        (address.to_string(), chunk_size)
+        (address, chunk_size)
     };
     
-    let rpc_url = "https://starknet-mainnet.public.blastapi.io";
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "https://starknet-mainnet.public.blastapi.io".to_string());
     
     // Get events from Starknet RPC
     let rpc_request = serde_json::json!({
@@ -359,12 +355,13 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
 
 #[tokio::main]
 async fn main() {
-    // Build our application with routes
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
     // Build our application with routes
     let app = Router::new()
-        .route("/", get(root_handler))
+        .route("/", post(fetch_starknet_events_handler))
         .route("/test", get(test_json_handler))
-        .route("/fetch-events", post(fetch_starknet_events_handler))
         .route("/get-abi/:contract_address", get(get_contract_abi_handler));
 
     // Run it
