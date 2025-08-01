@@ -1,0 +1,11 @@
+/target
+/node_modules
+/dist
+/build
+/coverage
+/logs
+/tmp
+/temp
+/cache
+/backup
+/archive
