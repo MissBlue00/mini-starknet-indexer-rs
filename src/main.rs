@@ -163,7 +163,7 @@ async fn fetch_starknet_events_handler(
         (req.address, req.chunk_size)
     } else {
         // Use default values if no JSON body provided
-        let address = "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"; // USDC contract
+        let address = "0x04270219d365d6b017231b52e92b3fb5d7c8378b05e9abc97724537a80e93b0f"; // USDC contract
         let chunk_size = 10;
         (address.to_string(), chunk_size)
     };
@@ -220,49 +220,57 @@ async fn decode_events_with_abi(response: &serde_json::Value, contract_address: 
     let abi_response = get_contract_abi_handler(Path(contract_address.to_string())).await;
     
     match abi_response {
-        Ok(abi_json) => {
-            // Parse the ABI JSON
-            match serde_json::from_str::<serde_json::Value>(&abi_json) {
-                Ok(abi_value) => {
-                    // Extract events from the response
-                    if let Some(result) = response.get("result") {
-                        if let Some(events) = result.get("events") {
-                            if let Some(events_array) = events.as_array() {
-                                let mut decoded_events = Vec::new();
-                                
-                                for event in events_array {
-                                    if let (Some(data), Some(keys), Some(block_number), Some(tx_hash)) = (
-                                        event.get("data"),
-                                        event.get("keys"),
-                                        event.get("block_number"),
-                                        event.get("transaction_hash")
-                                    ) {
-                                        // Try to decode based on event signature
-                                        let decoded_event = decode_single_event(
-                                            data.as_array().unwrap_or(&Vec::new()),
-                                            keys.as_array().unwrap_or(&Vec::new()),
-                                            block_number.as_u64().unwrap_or(0),
-                                            tx_hash.as_str().unwrap_or(""),
-                                            &abi_value
-                                        );
-                                        
-                                        decoded_events.push(decoded_event);
-                                    }
-                                }
-                                
-                                return serde_json::to_string_pretty(&serde_json::json!({
-                                    "original_response": response,
-                                    "decoded_events": decoded_events
-                                })).unwrap();
-                            }
+        Ok(abi_json_str) => {
+            // First, parse the full RPC response from get_contract_abi_handler
+            let full_abi_rpc_response: serde_json::Value = match serde_json::from_str(&abi_json_str) {
+                Ok(val) => val,
+                Err(_) => {
+                    // If parsing fails, return original response with an error message
+                    return serde_json::to_string_pretty(&serde_json::json!({
+                        "error": "Failed to parse ABI RPC response",
+                        "original_response": response,
+                        "raw_abi_response": abi_json_str
+                    })).unwrap();
+                }
+            };
+
+            // Now, extract the 'abi' field which is a string, and parse it again into an actual array
+            let parsed_abi_array: Option<serde_json::Value> = if let Some(result) = full_abi_rpc_response.get("result") {
+                if let Some(abi_str_value) = result.get("abi") {
+                    if let Some(abi_str) = abi_str_value.as_str() {
+                        serde_json::from_str(abi_str).ok()
+                    } else { None }
+                } else { None }
+            } else { None };
+
+            let abi_for_decoding = parsed_abi_array.as_ref().unwrap_or(&serde_json::Value::Null);
+
+            // Extract events from the response
+            let mut decoded_events = Vec::new();
+            if let Some(result) = response.get("result") {
+                if let Some(events_array) = result.get("events").and_then(|e| e.as_array()) {
+                    for event in events_array {
+                        if let (Some(data), Some(keys), Some(block_number), Some(tx_hash)) = (
+                            event.get("data"), event.get("keys"), event.get("block_number"), event.get("transaction_hash")
+                        ) {
+                            let decoded_event = decode_single_event(
+                                data.as_array().unwrap_or(&Vec::new()),
+                                keys.as_array().unwrap_or(&Vec::new()),
+                                block_number.as_u64().unwrap_or(0),
+                                tx_hash.as_str().unwrap_or(""),
+                                abi_for_decoding
+                            );
+                            decoded_events.push(decoded_event);
                         }
                     }
-                    
-                    // Fallback to original response if decoding fails
-                    serde_json::to_string_pretty(response).unwrap()
                 }
-                Err(_) => serde_json::to_string_pretty(response).unwrap()
             }
+            
+            serde_json::to_string_pretty(&serde_json::json!({
+                "original_response": response,
+                "decoded_events": decoded_events,
+                "contract_abi": full_abi_rpc_response // Keep the full RPC response for debugging
+            })).unwrap()
         }
         Err(_) => serde_json::to_string_pretty(response).unwrap()
     }
@@ -288,18 +296,19 @@ fn decode_single_event(
         ("Unknown".to_string(), Vec::new())
     };
     
-    decoded_data.insert("event_type".to_string(), serde_json::Value::String(event_name));
+    // Only add event_type if we found a real event name from ABI
+    if event_name != "Unknown" {
+        decoded_data.insert("event_type".to_string(), serde_json::Value::String(event_name));
+    }
     decoded_data.insert("block_number".to_string(), serde_json::Value::Number(serde_json::Number::from(block_number)));
     decoded_data.insert("transaction_hash".to_string(), serde_json::Value::String(transaction_hash.to_string()));
     
-    // Map data to field names from ABI
+    // Map data to field names from ABI - only use actual ABI field names
     for (index, value) in data.iter().enumerate() {
-        let field_name = if index < field_names.len() {
-            field_names[index].clone()
-        } else {
-            format!("param_{}", index)
-        };
-        decoded_data.insert(field_name, value.clone());
+        if index < field_names.len() {
+            decoded_data.insert(field_names[index].clone(), value.clone());
+        }
+        // Don't add fallback param_X names - only use actual ABI field names
     }
     
     serde_json::Value::Object(decoded_data)
@@ -322,18 +331,16 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
                             }
                         }
                         
-                        // For now, return the first Transfer event we find
-                        if name.contains("Transfer") {
-                            return (name.to_string(), field_names);
-                        }
+                        // Return the first event we find (Transfer, Swap, etc.)
+                        return (name.to_string(), field_names);
                     }
                 }
             }
         }
     }
     
-    // Fallback for Transfer event
-    ("Transfer".to_string(), vec!["from".to_string(), "to".to_string(), "value".to_string()])
+    // No fallback - only use actual ABI field names
+    ("Unknown".to_string(), Vec::new())
 }
 
 #[tokio::main]
