@@ -267,9 +267,7 @@ async fn decode_events_with_abi(response: &serde_json::Value, contract_address: 
             }
             
             serde_json::to_string_pretty(&serde_json::json!({
-                "original_response": response,
-                "decoded_events": decoded_events,
-                "contract_abi": full_abi_rpc_response // Keep the full RPC response for debugging
+                "decoded_events": decoded_events
             })).unwrap()
         }
         Err(_) => serde_json::to_string_pretty(response).unwrap()
