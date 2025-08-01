@@ -102,12 +102,7 @@ struct DecodedEvent {
     transaction_hash: String,
 }
 
-async fn root_handler() -> Json<MockResponse> {
-    Json(MockResponse {
-        status: "ok".to_string(),
-        data: "mock".to_string(),
-    })
-}
+
 
 async fn get_contract_abi_handler(Path(contract_address): Path<String>) -> Result<String, StatusCode> {
     let rpc_url = "https://starknet-mainnet.public.blastapi.io";
@@ -360,11 +355,9 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
 #[tokio::main]
 async fn main() {
     // Build our application with routes
-    // Build our application with routes
     let app = Router::new()
-        .route("/", get(root_handler))
+        .route("/", post(fetch_starknet_events_handler))
         .route("/test", get(test_json_handler))
-        .route("/fetch-events", post(fetch_starknet_events_handler))
         .route("/get-abi/:contract_address", get(get_contract_abi_handler));
 
     // Run it
