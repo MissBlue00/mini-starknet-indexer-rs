@@ -247,7 +247,14 @@ async fn decode_events_with_abi(response: &serde_json::Value, contract_address: 
 
             // Extract events from the response
             let mut decoded_events = Vec::new();
+            let mut continuation_key = None;
+            
             if let Some(result) = response.get("result") {
+                // Extract continuation key if present
+                if let Some(continuation) = result.get("continuation_token") {
+                    continuation_key = Some(continuation.clone());
+                }
+                
                 if let Some(events_array) = result.get("events").and_then(|e| e.as_array()) {
                     for event in events_array {
                         if let (Some(data), Some(keys), Some(block_number), Some(tx_hash)) = (
@@ -266,9 +273,15 @@ async fn decode_events_with_abi(response: &serde_json::Value, contract_address: 
                 }
             }
             
-            serde_json::to_string_pretty(&serde_json::json!({
-                "decoded_events": decoded_events
-            })).unwrap()
+            // Build response with decoded events and continuation key
+            let mut response_json = serde_json::Map::new();
+            response_json.insert("decoded_events".to_string(), serde_json::Value::Array(decoded_events));
+            
+            if let Some(continuation) = continuation_key {
+                response_json.insert("continuation_token".to_string(), continuation);
+            }
+            
+            serde_json::to_string_pretty(&serde_json::Value::Object(response_json)).unwrap()
         }
         Err(_) => serde_json::to_string_pretty(response).unwrap()
     }
