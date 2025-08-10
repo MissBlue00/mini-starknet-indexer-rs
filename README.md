@@ -16,6 +16,37 @@ cargo run
 
 Server runs at `http://localhost:3000`
 
+### Configuration
+
+Supports environment variables and command-line overrides (CLI takes precedence):
+
+- **Env vars**:
+  - `RPC_URL` (default: `https://starknet-mainnet.public.blastapi.io`)
+  - `CONTRACT_ADDRESS` (optional default for REST event fetch)
+- **CLI overrides**:
+
+```bash
+# Show help
+cargo run -- --help
+
+# Use defaults from .env or built-in
+cargo run
+
+# Override RPC URL
+cargo run -- --rpc-url https://starknet-mainnet.public.blastapi.io
+
+# Override contract address
+cargo run -- --contract-address 0x1234567890abcdef
+
+# Override both
+cargo run -- --rpc-url https://starknet-mainnet.public.blastapi.io \
+           --contract-address 0x1234567890abcdef
+```
+
+Validation:
+- `--rpc-url` must be a valid URL
+- `--contract-address` must start with `0x` and be hex
+
 ## REST API
 
 - POST `/` — Fetch events (best-effort decoding)

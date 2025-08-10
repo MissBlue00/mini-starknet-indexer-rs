@@ -12,9 +12,41 @@ use std::env;
 use reqwest::Client;
 use async_graphql::http::GraphiQLSource;
 use async_graphql_axum::{GraphQL, GraphQLSubscription};
+use clap::Parser;
+use url::Url;
 
 mod graphql;
 mod starknet;
+
+#[derive(Parser, Debug)]
+#[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]
+struct CliArgs {
+    #[arg(long, value_name = "URL", value_parser = parse_url, help = "RPC URL for Starknet JSON-RPC (overrides RPC_URL env)")]
+    rpc_url: Option<String>,
+
+    #[arg(long, value_name = "ADDRESS", value_parser = parse_contract_address, help = "Default contract address for REST fetch (overrides CONTRACT_ADDRESS env)")]
+    contract_address: Option<String>,
+}
+
+fn parse_url(s: &str) -> Result<String, String> {
+    Url::parse(s)
+        .map(|_| s.to_string())
+        .map_err(|e| format!("invalid URL: {}", e))
+}
+
+fn parse_contract_address(s: &str) -> Result<String, String> {
+    if !s.starts_with("0x") {
+        return Err("contract address must start with 0x".to_string());
+    }
+    let hex = &s[2..];
+    if hex.is_empty() {
+        return Err("contract address hex part is empty".to_string());
+    }
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("contract address must be hexadecimal".to_string());
+    }
+    Ok(s.to_string())
+}
 
 #[derive(Serialize, Deserialize)]
 struct MockResponse {
@@ -363,6 +395,14 @@ fn find_event_info_from_abi(_event_signature: &str, abi: &serde_json::Value) -> 
 async fn main() {
     // Load environment variables from .env file
     dotenv::dotenv().ok();
+    // Parse CLI args and override env if provided
+    let cli = CliArgs::parse();
+    if let Some(url) = cli.rpc_url.as_deref() {
+        env::set_var("RPC_URL", url);
+    }
+    if let Some(addr) = cli.contract_address.as_deref() {
+        env::set_var("CONTRACT_ADDRESS", addr);
+    }
     
     // Build GraphQL schema
     let rpc = crate::starknet::RpcContext::from_env();
