@@ -1,14 +1,20 @@
 use axum::{
-    routing::{get, post},
+    routing::{get, post, get_service, post_service},
     Router,
     Json,
     http::StatusCode,
     extract::Path,
+    response::Html,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::env;
 use reqwest::Client;
+use async_graphql::http::GraphiQLSource;
+use async_graphql_axum::{GraphQL, GraphQLSubscription};
+
+mod graphql;
+mod starknet;
 
 #[derive(Serialize, Deserialize)]
 struct MockResponse {
@@ -358,11 +364,20 @@ async fn main() {
     // Load environment variables from .env file
     dotenv::dotenv().ok();
     
+    // Build GraphQL schema
+    let rpc = crate::starknet::RpcContext::from_env();
+    let schema = crate::graphql::schema::build_schema(rpc);
+
     // Build our application with routes
     let app = Router::new()
         .route("/", post(fetch_starknet_events_handler))
         .route("/test", get(test_json_handler))
-        .route("/get-abi/:contract_address", get(get_contract_abi_handler));
+        .route("/get-abi/:contract_address", get(get_contract_abi_handler))
+        // GraphQL: POST for queries/mutations, separate WS endpoint for subscriptions
+        .route("/graphql", post_service(GraphQL::new(schema.clone())))
+        .route("/ws", get_service(GraphQLSubscription::new(schema.clone())))
+        // GraphiQL UI
+        .route("/graphiql", get(graphiql_handler));
 
     // Run it
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -370,4 +385,9 @@ async fn main() {
     
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn graphiql_handler() -> Html<String> {
+    // For local dev: ws://
+    Html(GraphiQLSource::build().endpoint("/graphql").subscription_endpoint("ws://localhost:3000/ws").finish())
 }

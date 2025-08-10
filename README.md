@@ -1,88 +1,118 @@
-# Mini Starknet Indexer
+## Mini Starknet Indexer
 
-A Rust-based web server that fetches events from Starknet contracts using the Starknet RPC API.
+Rust server exposing REST and GraphQL APIs to fetch and decode Starknet contract events via the Starknet RPC.
 
-## Features
-
-- ✅ POST request to Starknet RPC endpoint
-- ✅ Fetches events from specified contract addresses
-- ✅ Graceful error handling and networking issues
-- ✅ Full JSON response logging
-- ✅ Structured request/response handling with serde
-
-## Setup
+## Quick start
 
 1. Install Rust and Cargo
-2. Clone this repository
+2. Set environment (optional):
+   - `RPC_URL` (default: `https://starknet-mainnet.public.blastapi.io`)
+   - `CONTRACT_ADDRESS` (optional default for REST event fetch)
 3. Run the server:
 
 ```bash
 cargo run
 ```
 
-The server will start on `http://localhost:3000`
+Server runs at `http://localhost:3000`
 
-## API Endpoints
+## REST API
 
-### POST `/fetch-events`
+- POST `/` — Fetch events (best-effort decoding)
+  - Body:
+    ```json
+    { "address": "0x...", "chunk_size": 100 }
+    ```
+- GET `/get-abi/:contract_address` — Raw class/ABI from RPC
+- GET `/test` — Health check
 
-Fetches events from a Starknet contract.
+## GraphQL API
 
-**Request Body:**
-```json
-{
-  "address": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
-  "chunk_size": 100
+- HTTP endpoint: `POST /graphql`
+- Subscriptions (WebSocket): `GET ws://localhost:3000/ws`
+- GraphiQL playground: `GET /graphiql`
+
+### Query examples
+
+- Basic events
+```graphql
+query GetEvents($contractAddress: String!) {
+  events(contractAddress: $contractAddress, first: 5) {
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges {
+      cursor
+      node {
+        id
+        eventType
+        blockNumber
+        transactionHash
+        decodedData { json }
+      }
+    }
+  }
 }
 ```
 
-**Example Request:**
-```bash
-curl -X POST http://localhost:3000/fetch-events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "address": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
-    "chunk_size": 100
-  }'
+- Filtered events (by type and block range)
+```graphql
+query GetFilteredEvents($addr: String!, $from: String!, $to: String!) {
+  events(contractAddress: $addr, fromBlock: $from, toBlock: $to, eventTypes: ["Transfer"], first: 10) {
+    edges { node { id eventType blockNumber transactionHash decodedData { json } } }
+    pageInfo { hasNextPage endCursor }
+  }
+}
 ```
 
-**Response:**
-The endpoint returns the full JSON response from the Starknet RPC API, including:
-- Events array
-- Continuation token for pagination
-- Page information
+- Contract info + ABI
+```graphql
+query GetContract($address: String!) {
+  contract(address: $address) {
+    address
+    verified
+    events { name type inputs { name type indexed } }
+    abi
+  }
+}
+```
 
-## RPC Endpoint
+### Subscription example
 
-The implementation uses the public Starknet RPC endpoint:
-- **URL:** `https://starknet-mainnet.public.blastapi.io`
-- **Method:** `starknet_getEvents`
+```graphql
+subscription OnEvents($addr: String!) {
+  eventStream(contractAddress: $addr, eventTypes: ["Transfer"]) {
+    id
+    eventType
+    blockNumber
+    transactionHash
+    decodedData { json }
+  }
+}
+```
 
-## Error Handling
+Notes:
+- Subscriptions are implemented via periodic polling of the RPC (3s). For production, integrate a dedicated indexer/broker.
+- `decodedData.json` contains best-effort decoded fields based on the contract ABI.
 
-The implementation includes comprehensive error handling for:
-- Network connectivity issues
-- HTTP status errors
-- JSON parsing errors
-- Invalid responses
+### Pagination
 
-All errors are logged to the console with descriptive messages.
+- Cursor-based via `pageInfo.endCursor` and `pageInfo.hasNextPage`
+- Request the next page by passing `after: <endCursor>`
+
+## Internals
+
+- `src/starknet.rs` wraps common Starknet RPC calls
+- `src/graphql/` contains schema, types, and resolvers
+- Decoding is ABI-driven and best-effort; unknown events return raw keys/data
 
 ## Dependencies
 
-- `axum` - Web framework
-- `tokio` - Async runtime
-- `serde` - Serialization/deserialization
-- `serde_json` - JSON handling
-- `reqwest` - HTTP client
-- `tower-http` - HTTP middleware
+- `axum`, `tokio` — server/runtime
+- `async-graphql`, `async-graphql-axum` — GraphQL server & Axum integration
+- `reqwest`, `serde`, `serde_json` — HTTP and JSON
+- `tokio-stream`, `futures` — subscription stream helpers
 
-## Testing
+## Troubleshooting
 
-You can test the API using the provided test script:
-
-```bash
-./test_starknet_events.sh
-```
-
-Or manually with curl as shown in the examples above.
+- If GraphiQL subscriptions fail locally, ensure the WS endpoint is `ws://localhost:3000/ws` in the GraphiQL UI.
+- Set a project-specific `RPC_URL` if the public endpoint rate-limits.

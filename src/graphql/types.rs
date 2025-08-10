@@ -1,0 +1,115 @@
+use async_graphql::{InputObject, SimpleObject};
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct PageInfo {
+    pub has_next_page: bool,
+    pub has_previous_page: bool,
+    pub start_cursor: Option<String>,
+    pub end_cursor: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventEdge {
+    pub node: Event,
+    pub cursor: String,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventConnection {
+    pub edges: Vec<EventEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventFieldValue {
+    pub r#type: String,
+    pub value: String,
+    pub decoded_value: Option<String>,
+}
+
+// Represent decoded data as JSON string for now to avoid fully dynamic GraphQL types
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventData {
+    pub json: String,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Event {
+    pub id: String,
+    pub contract_address: String,
+    pub event_type: String,
+    pub block_number: String,
+    pub transaction_hash: String,
+    pub log_index: i32,
+    pub timestamp: String,
+    pub decoded_data: Option<EventData>,
+    pub raw_data: Vec<String>,
+    pub raw_keys: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Contract {
+    pub address: String,
+    pub abi: String,
+    pub events: Vec<EventSchema>,
+    pub name: Option<String>,
+    pub verified: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventSchema {
+    pub name: String,
+    pub r#type: String,
+    pub inputs: Vec<EventInput>,
+    pub anonymous: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventInput {
+    pub name: String,
+    pub r#type: String,
+    pub indexed: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Block {
+    pub number: String,
+    pub hash: String,
+    pub timestamp: String,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Transaction {
+    pub hash: String,
+    pub block_number: String,
+    pub from: String,
+    pub to: String,
+    pub value: String,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventQueryArgs {
+    pub contract_address: String,
+    pub from_block: Option<String>,
+    pub to_block: Option<String>,
+    pub event_types: Option<Vec<String>>,
+    pub from_address: Option<String>,
+    pub to_address: Option<String>,
+    pub transaction_hash: Option<String>,
+    pub first: Option<i32>,
+    pub after: Option<String>,
+}
+
