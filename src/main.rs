@@ -413,10 +413,11 @@ async fn main() {
         .route("/", post(fetch_starknet_events_handler))
         .route("/test", get(test_json_handler))
         .route("/get-abi/:contract_address", get(get_contract_abi_handler))
-        // GraphQL: POST for queries/mutations, separate WS endpoint for subscriptions
+        // GraphQL: POST for queries/mutations, GET for GraphiQL interface, separate WS endpoint for subscriptions
         .route("/graphql", post_service(GraphQL::new(schema.clone())))
+        .route("/graphql", get(graphiql_handler))
         .route("/ws", get_service(GraphQLSubscription::new(schema.clone())))
-        // GraphiQL UI
+        // GraphiQL UI (alternative endpoint)
         .route("/graphiql", get(graphiql_handler));
 
     // Run it

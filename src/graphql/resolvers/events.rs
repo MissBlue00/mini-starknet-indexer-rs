@@ -2,7 +2,7 @@ use async_graphql::{Context, Object, Result as GqlResult};
 use serde_json::Value;
 
 use crate::starknet::{decode_event_using_abi, get_events, get_contract_abi_string, RpcContext};
-use crate::graphql::types::{Event, EventConnection, EventData, EventEdge, EventQueryArgs, PageInfo};
+use crate::graphql::types::{Event, EventConnection, EventData, EventEdge, PageInfo};
 
 #[derive(Default)]
 pub struct EventQueryRoot;
@@ -50,7 +50,6 @@ impl EventQueryRoot {
         let abi_json: Value = serde_json::from_str(&abi_str).unwrap_or(Value::Array(vec![]));
 
         let mut edges: Vec<EventEdge> = Vec::new();
-        let mut total_count: i32 = 0;
         let mut end_cursor: Option<String> = None;
 
         if let Some(result) = raw.get("result") {
@@ -84,7 +83,7 @@ impl EventQueryRoot {
             end_cursor = result.get("continuation_token").and_then(|v| v.as_str()).map(|s| s.to_string());
         }
 
-        total_count = edges.len() as i32;
+        let total_count = edges.len() as i32;
 
         let page_info = PageInfo {
             has_next_page: end_cursor.is_some(),

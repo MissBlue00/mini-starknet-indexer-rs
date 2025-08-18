@@ -1,5 +1,5 @@
 use async_graphql::{Context, Subscription};
-use futures::{stream, StreamExt, Stream};
+use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
 use std::time::Duration;
 use tokio_stream::wrappers::IntervalStream;
@@ -27,10 +27,9 @@ impl SubscriptionRoot {
                 let contract_address = contract_address.clone();
                 let event_types = event_types.clone();
                 let abi_json = abi_json.clone();
-                let mut cont: Option<String> = None;
                 let mut last_tx: Option<String> = None;
                 async move {
-                    let raw = get_events(&rpc, &contract_address, Some("latest"), Some("latest"), 50, cont.as_deref()).await.ok();
+                    let raw = get_events(&rpc, &contract_address, Some("latest"), Some("latest"), 50, None).await.ok();
                     if let Some(raw) = raw {
                         let mut out: Vec<Event> = Vec::new();
                         if let Some(result) = raw.get("result") {
@@ -61,7 +60,6 @@ impl SubscriptionRoot {
                                     last_tx = Some(tx_hash);
                                 }
                             }
-                            cont = result.get("continuation_token").and_then(|v| v.as_str()).map(|s| s.to_string());
                         }
                         return out.into_iter();
                     }
