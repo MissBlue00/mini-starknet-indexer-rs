@@ -80,6 +80,7 @@ pub async fn get_events(
     rpc_call(ctx, &payload).await
 }
 
+#[allow(dead_code)]
 pub async fn get_block_with_tx_hashes_by_number(ctx: &RpcContext, block_number: u64) -> Result<Value, String> {
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
@@ -90,6 +91,7 @@ pub async fn get_block_with_tx_hashes_by_number(ctx: &RpcContext, block_number: 
     rpc_call(ctx, &payload).await
 }
 
+#[allow(dead_code)]
 pub async fn get_transaction_by_hash(ctx: &RpcContext, tx_hash: &str) -> Result<Value, String> {
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
