@@ -1,7 +1,7 @@
 use async_graphql::{Context, Object, Result as GqlResult};
-use serde_json::Value;
+use std::sync::Arc;
 
-use crate::starknet::{decode_event_using_abi, get_events, get_contract_abi_string, RpcContext};
+use crate::database::Database;
 use crate::graphql::types::{Event, EventConnection, EventData, EventEdge, PageInfo};
 
 #[derive(Default)]
@@ -15,84 +15,89 @@ impl EventQueryRoot {
         #[graphql(name = "contractAddress")] contract_address: String,
         #[graphql(name = "fromBlock")] from_block: Option<String>,
         #[graphql(name = "toBlock")] to_block: Option<String>,
-        #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>, // currently best-effort filter post-decode
+        #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>,
         #[graphql(name = "fromAddress")] _from_address: Option<String>,
         #[graphql(name = "toAddress")] _to_address: Option<String>,
         #[graphql(name = "transactionHash")] _transaction_hash: Option<String>,
         first: Option<i32>,
         after: Option<String>,
     ) -> GqlResult<EventConnection> {
-        let rpc = ctx.data::<RpcContext>()?.clone();
+        let database = ctx.data::<Arc<Database>>()?.clone();
+        let limit = first.unwrap_or(10).clamp(1, 100);
+        
+        // Parse pagination - offset from cursor or default to 0
+        let offset = after.as_ref()
+            .and_then(|cursor| cursor.parse::<i32>().ok())
+            .unwrap_or(0);
 
-        let first = first.unwrap_or(10).clamp(1, 100);
-        let continuation = after.as_deref();
+        // Parse block range
+        let from_block_num = from_block.as_ref()
+            .and_then(|s| s.parse::<u64>().ok());
+        let to_block_num = to_block.as_ref()
+            .and_then(|s| s.parse::<u64>().ok());
 
-        // If no range and not paginating, default to latest
-        let (use_from_block, use_to_block) = if from_block.is_none() && to_block.is_none() && after.is_none() {
-            (Some("latest".to_string()), Some("latest".to_string()))
-        } else {
-            (from_block.clone(), to_block.clone())
-        };
-
-        let raw = get_events(
-            &rpc,
+        // Query events from database
+        let db_events = database.get_events(
             &contract_address,
-            use_from_block.as_deref(),
-            use_to_block.as_deref(),
-            first as u32,
-            continuation,
-        ).await.map_err(|e| async_graphql::Error::new(e))?;
+            event_types.as_ref().map(|v| v.as_slice()),
+            from_block_num,
+            to_block_num,
+            limit,
+            offset,
+        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
 
-        // Fetch ABI
-        let abi_str = get_contract_abi_string(&rpc, &contract_address)
-            .await
-            .unwrap_or_else(|_| "[]".to_string());
-        let abi_json: Value = serde_json::from_str(&abi_str).unwrap_or(Value::Array(vec![]));
+        // Get total count for pagination
+        let total_count = database.count_events(
+            &contract_address,
+            event_types.as_ref().map(|v| v.as_slice()),
+        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))? as i32;
 
         let mut edges: Vec<EventEdge> = Vec::new();
-        let mut end_cursor: Option<String> = None;
+        
+        for (idx, db_event) in db_events.iter().enumerate() {
+            // Parse raw data back to vec
+            let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
+                .unwrap_or_default();
+            let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
+                .unwrap_or_default();
 
-        if let Some(result) = raw.get("result") {
-            // We'll compute total_count from edges after filtering
-            if let Some(events) = result.get("events").and_then(|v| v.as_array()) {
-                for (idx, ev) in events.iter().enumerate() {
-                    let (ev_type, decoded) = decode_event_using_abi(&abi_json, ev);
-                    if let Some(filter_types) = &event_types {
-                        if !filter_types.contains(&ev_type) { continue; }
-                    }
-                    let id = format!("{}:{}", ev.get("transaction_hash").and_then(|v| v.as_str()).unwrap_or(""), idx);
-                    let block_number = ev.get("block_number").and_then(|v| v.as_u64()).unwrap_or_default().to_string();
-                    let tx_hash = ev.get("transaction_hash").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let raw_data = ev.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default().into_iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                    let raw_keys = ev.get("keys").and_then(|v| v.as_array()).cloned().unwrap_or_default().into_iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                    let event = Event {
-                        id: id.clone(),
-                        contract_address: contract_address.clone(),
-                        event_type: ev_type,
-                        block_number,
-                        transaction_hash: tx_hash,
-                        log_index: idx as i32,
-                        timestamp: "".to_string(),
-                        decoded_data: Some(EventData { json: decoded.to_string() }),
-                        raw_data,
-                        raw_keys,
-                    };
-                    edges.push(EventEdge { node: event, cursor: id });
-                }
-            }
-            end_cursor = result.get("continuation_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let event = Event {
+                id: db_event.id.clone(),
+                contract_address: db_event.contract_address.clone(),
+                event_type: db_event.event_type.clone(),
+                block_number: db_event.block_number.to_string(),
+                transaction_hash: db_event.transaction_hash.clone(),
+                log_index: db_event.log_index,
+                timestamp: db_event.timestamp.to_rfc3339(),
+                decoded_data: db_event.decoded_data.as_ref().map(|json| EventData { 
+                    json: json.clone() 
+                }),
+                raw_data,
+                raw_keys,
+            };
+            
+            let cursor = (offset + idx as i32 + limit).to_string();
+            edges.push(EventEdge { 
+                node: event, 
+                cursor: cursor.clone(),
+            });
         }
 
-        let total_count = edges.len() as i32;
-
+        let has_next_page = (offset + limit) < total_count;
+        let has_previous_page = offset > 0;
+        
         let page_info = PageInfo {
-            has_next_page: end_cursor.is_some(),
-            has_previous_page: after.is_some(),
+            has_next_page,
+            has_previous_page,
             start_cursor: edges.first().map(|e| e.cursor.clone()),
-            end_cursor,
+            end_cursor: edges.last().map(|e| e.cursor.clone()),
         };
 
-        Ok(EventConnection { edges, page_info, total_count })
+        Ok(EventConnection { 
+            edges, 
+            page_info, 
+            total_count 
+        })
     }
 }
 
