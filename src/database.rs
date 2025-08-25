@@ -18,7 +18,9 @@ pub struct EventRecord {
 
 #[derive(Debug, Clone)]
 pub struct IndexerState {
+    #[allow(dead_code)]
     pub id: i32,
+    #[allow(dead_code)] 
     pub contract_address: String,
     pub last_synced_block: u64,
     pub updated_at: DateTime<Utc>,
