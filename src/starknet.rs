@@ -55,6 +55,23 @@ pub async fn get_contract_abi_string(ctx: &RpcContext, address: &str) -> Result<
     Ok(abi_str.to_string())
 }
 
+pub async fn get_current_block_number(ctx: &RpcContext) -> Result<u64, String> {
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "starknet_blockNumber",
+        "params": [],
+        "id": 1
+    });
+    
+    let response = rpc_call(ctx, &payload).await?;
+    response
+        .get("result")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "Failed to parse block number".to_string())
+}
+
+
+
 pub async fn get_events(
     ctx: &RpcContext,
     address: &str,
@@ -67,8 +84,20 @@ pub async fn get_events(
         "address": address,
         "chunk_size": chunk_size,
     });
-    if let Some(f) = from_block { filter["from_block"] = serde_json::Value::String(f.to_string()); }
-    if let Some(t) = to_block { filter["to_block"] = serde_json::Value::String(t.to_string()); }
+    if let Some(f) = from_block { 
+        filter["from_block"] = if f == "latest" || f == "pending" {
+            serde_json::Value::String(f.to_string())
+        } else {
+            serde_json::json!({"block_number": f.parse::<u64>().unwrap_or(0)})
+        };
+    }
+    if let Some(t) = to_block { 
+        filter["to_block"] = if t == "latest" || t == "pending" {
+            serde_json::Value::String(t.to_string())
+        } else {
+            serde_json::json!({"block_number": t.parse::<u64>().unwrap_or(0)})
+        };
+    }
     if let Some(c) = continuation { filter["continuation_token"] = serde_json::Value::String(c.to_string()); }
 
     let payload = serde_json::json!({

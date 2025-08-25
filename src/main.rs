@@ -17,6 +17,8 @@ use url::Url;
 
 mod graphql;
 mod starknet;
+mod database;
+mod indexer;
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]
@@ -404,28 +406,150 @@ async fn main() {
         env::set_var("CONTRACT_ADDRESS", addr);
     }
     
-    // Build GraphQL schema
+    // Initialize database
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:events.db".to_string());
+    let database = std::sync::Arc::new(
+        crate::database::Database::new(&database_url)
+            .await
+            .expect("Failed to initialize database")
+    );
+    
+    // Build GraphQL schema with database
     let rpc = crate::starknet::RpcContext::from_env();
-    let schema = crate::graphql::schema::build_schema(rpc);
+    let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone());
 
     // Build our application with routes
     let app = Router::new()
         .route("/", post(fetch_starknet_events_handler))
         .route("/test", get(test_json_handler))
         .route("/get-abi/:contract_address", get(get_contract_abi_handler))
+        .route("/sync-status", get(sync_status_handler))
         // GraphQL: POST for queries/mutations, GET for GraphiQL interface, separate WS endpoint for subscriptions
         .route("/graphql", post_service(GraphQL::new(schema.clone())))
         .route("/graphql", get(graphiql_handler))
         .route("/ws", get_service(GraphQLSubscription::new(schema.clone())))
         // GraphiQL UI (alternative endpoint)
-        .route("/graphiql", get(graphiql_handler));
+        .route("/graphiql", get(graphiql_handler))
+        .with_state((database.clone(), rpc.clone()));
 
-    // Run it
+    // Start background indexer and server concurrently
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("Server running on {}", addr);
+    println!("🌐 Starting GraphQL server on {}", addr);
     
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // Start background indexer for default contract if specified
+    let indexer_handle = if let Ok(contract_address) = env::var("CONTRACT_ADDRESS") {
+        println!("🚀 Starting background indexer for contract: {}", contract_address);
+        let indexer_database = database.clone();
+        let indexer_rpc = rpc.clone();
+        let indexer_contract = contract_address.clone();
+        
+        Some(tokio::spawn(async move {
+            crate::indexer::start_background_indexer(
+                indexer_database,
+                indexer_rpc,
+                indexer_contract,
+            ).await;
+        }))
+    } else {
+        println!("ℹ️  No CONTRACT_ADDRESS env var set - background indexer not started");
+        println!("   GraphQL queries will work but may be slower without pre-indexed data");
+        None
+    };
+
+    println!("✅ All services started successfully!");
+    println!("   📊 GraphQL Playground: http://localhost:3000/graphql");
+    println!("   🔍 GraphiQL Interface: http://localhost:3000/graphiql");
+    println!("   📈 Sync Status API: http://localhost:3000/sync-status");
+
+    // Wait for either service to complete (they should run indefinitely)
+    if let Some(indexer) = indexer_handle {
+        tokio::select! {
+            _ = server_handle => println!("🛑 GraphQL server stopped"),
+            _ = indexer => println!("🛑 Background indexer stopped"),
+        }
+    } else {
+        server_handle.await.unwrap();
+    }
+}
+
+async fn sync_status_handler(
+    axum::extract::State((database, rpc)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext)>
+) -> Json<serde_json::Value> {
+    use serde_json::json;
+    
+    // Get contract address from env
+    let contract_address = match std::env::var("CONTRACT_ADDRESS") {
+        Ok(addr) => addr,
+        Err(_) => {
+            return Json(json!({
+                "status": "error",
+                "message": "No CONTRACT_ADDRESS configured"
+            }));
+        }
+    };
+
+    // Get current block from network
+    let current_block = match crate::starknet::get_current_block_number(&rpc).await {
+        Ok(block) => block,
+        Err(e) => {
+            return Json(json!({
+                "status": "error",
+                "message": format!("Failed to get current block: {}", e)
+            }));
+        }
+    };
+
+    // Get indexer state
+    let indexer_state = match database.get_indexer_state(&contract_address).await {
+        Ok(Some(state)) => state,
+        Ok(None) => {
+            return Json(json!({
+                "status": "not_started",
+                "current_block": current_block,
+                "last_synced_block": 0,
+                "blocks_behind": current_block,
+                "message": "Indexer not started yet"
+            }));
+        }
+        Err(e) => {
+            return Json(json!({
+                "status": "error",
+                "message": format!("Database error: {}", e)
+            }));
+        }
+    };
+
+    let blocks_behind = current_block.saturating_sub(indexer_state.last_synced_block);
+    let sync_percentage = if current_block > 0 {
+        (indexer_state.last_synced_block as f64 / current_block as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    let status = if blocks_behind > 100 {
+        "out_of_sync"
+    } else if blocks_behind > 10 {
+        "catching_up"
+    } else if blocks_behind > 0 {
+        "nearly_synced"
+    } else {
+        "fully_synced"
+    };
+
+    Json(json!({
+        "status": status,
+        "current_block": current_block,
+        "last_synced_block": indexer_state.last_synced_block,
+        "blocks_behind": blocks_behind,
+        "sync_percentage": format!("{:.2}%", sync_percentage),
+        "contract_address": contract_address,
+        "last_updated": indexer_state.updated_at.to_rfc3339()
+    }))
 }
 
 async fn graphiql_handler() -> Html<String> {
