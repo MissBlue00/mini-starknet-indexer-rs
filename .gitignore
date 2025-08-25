@@ -11,3 +11,5 @@ Cargo.lock
 /backup
 /archive
 .env
+.DS_Store
+events.db
