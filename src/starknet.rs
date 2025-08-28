@@ -157,27 +157,144 @@ pub fn decode_event_using_abi(abi_json: &serde_json::Value, event: &serde_json::
     let keys = event.get("keys").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let data = event.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
-    // Find first event in ABI and map members by order (best-effort)
     if let Some(arr) = abi_json.as_array() {
+        // Look for all event definitions - both direct events and nested ones
         for item in arr {
             if item.get("type").and_then(|v| v.as_str()) == Some("event") {
                 let full_name = item.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
                 let name = full_name.split("::").last().unwrap_or(full_name).to_string();
-                let members: Vec<String> = item
-                    .get("members")
-                    .and_then(|m| m.as_array())
-                    .map(|a| a.iter().filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())).collect())
-                    .unwrap_or_default();
-                let mut decoded = serde_json::Map::new();
-                for (idx, member_name) in members.iter().enumerate() {
-                    if let Some(val) = data.get(idx) { decoded.insert(member_name.clone(), val.clone()); }
+                
+                // Check if this is a simple struct event
+                if item.get("kind").and_then(|k| k.as_str()) == Some("struct") {
+                    let members = item
+                        .get("members")
+                        .and_then(|m| m.as_array())
+                        .map(|members_array| {
+                            members_array.iter()
+                                .filter_map(|member| {
+                                    let member_name = member.get("name")?.as_str()?;
+                                    let member_type = member.get("type")?.as_str()?;
+                                    let is_key = member.get("kind")
+                                        .and_then(|k| k.as_str())
+                                        .map(|k| k == "key")
+                                        .unwrap_or(false);
+                                    Some((member_name.to_string(), member_type.to_string(), is_key))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    // For struct events, we need to account for nested event selectors
+                    // In enum events, the keys array typically contains:
+                    // [main_event_selector, variant_selector, ...actual_field_values]
+                    let mut decoded = serde_json::Map::new();
+                    let mut key_index = if keys.len() > members.len() + 1 { 2 } else { 1 }; // Skip event selectors
+                    let mut data_index = 0;
+
+                    // Decode members according to their types
+                    for (member_name, member_type, is_key) in &members {
+                        let decoded_value = if *is_key {
+                            // This field comes from keys array
+                            if let Some(key_val) = keys.get(key_index) {
+                                key_index += 1;
+                                decode_cairo_value(key_val, member_type)
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        } else {
+                            // This field comes from data array
+                            if let Some(data_val) = data.get(data_index) {
+                                data_index += 1;
+                                decode_cairo_value(data_val, member_type)
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        };
+                        
+                        decoded.insert(member_name.clone(), decoded_value);
+                    }
+
+                    // Return if we have any members to decode
+                    if !members.is_empty() {
+                        // Include raw keys and data for debugging
+                        decoded.insert("_keys".to_string(), serde_json::Value::Array(keys.clone()));
+                        decoded.insert("_raw_data".to_string(), serde_json::Value::Array(data.clone()));
+                        
+                        return (name, serde_json::Value::Object(decoded));
+                    }
                 }
-                // include keys for reference
-                decoded.insert("_keys".to_string(), serde_json::Value::Array(keys.clone()));
-                return (name, serde_json::Value::Object(decoded));
             }
         }
     }
-    ("Unknown".to_string(), serde_json::json!({"_keys": keys, "_data": data}))
+    
+    // Fallback: return raw data with field names if possible
+    let mut decoded = serde_json::Map::new();
+    for (idx, val) in data.iter().enumerate() {
+        decoded.insert(format!("field_{}", idx), val.clone());
+    }
+    decoded.insert("_keys".to_string(), serde_json::Value::Array(keys.clone()));
+    decoded.insert("_raw_data".to_string(), serde_json::Value::Array(data.clone()));
+    
+    ("Unknown".to_string(), serde_json::Value::Object(decoded))
+}
+
+fn decode_cairo_value(value: &serde_json::Value, cairo_type: &str) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => {
+            match cairo_type {
+                "felt252" | "felt" => {
+                    // Try to decode felt as different formats
+                    if let Ok(num) = s.parse::<u64>() {
+                        // If it's a reasonable number, show both hex and decimal
+                        serde_json::json!({
+                            "hex": s,
+                            "decimal": num.to_string(),
+                            "type": "felt252"
+                        })
+                    } else {
+                        // Keep as hex string
+                        serde_json::json!({
+                            "hex": s,
+                            "type": "felt252"
+                        })
+                    }
+                },
+                "u8" | "u16" | "u32" | "u64" | "u128" | "u256" => {
+                    // Parse as number if possible
+                    if let Ok(num) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
+                        serde_json::json!({
+                            "value": num,
+                            "hex": s,
+                            "type": cairo_type
+                        })
+                    } else if let Ok(num) = s.parse::<u64>() {
+                        serde_json::json!({
+                            "value": num,
+                            "type": cairo_type
+                        })
+                    } else {
+                        serde_json::json!({
+                            "raw": s,
+                            "type": cairo_type
+                        })
+                    }
+                },
+                "ContractAddress" | "contract_address" => {
+                    serde_json::json!({
+                        "address": s,
+                        "type": "ContractAddress"
+                    })
+                },
+                _ => {
+                    // Default: return the raw value with type info
+                    serde_json::json!({
+                        "raw": s,
+                        "type": cairo_type
+                    })
+                }
+            }
+        },
+        _ => value.clone()
+    }
 }
 

@@ -1,5 +1,5 @@
 use async_graphql::{InputObject, SimpleObject};
-use serde::{Serialize, Deserialize};
+
 
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
@@ -33,11 +33,21 @@ pub struct EventFieldValue {
     pub decoded_value: Option<String>,
 }
 
-// Represent decoded data as JSON string for now to avoid fully dynamic GraphQL types
+// Represent decoded data as structured fields with proper GraphQL types
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
 pub struct EventData {
-    pub json: String,
+    pub json: String, // Keep for backward compatibility
+    pub fields: Option<Vec<EventField>>, // New structured format
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventField {
+    pub name: String,
+    pub value: String, // Raw value
+    pub decoded_value: Option<serde_json::Value>, // Decoded/typed value
+    pub field_type: String,
 }
 
 #[derive(SimpleObject, Clone)]
