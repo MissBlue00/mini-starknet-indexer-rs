@@ -1,4 +1,5 @@
 use async_graphql::{InputObject, SimpleObject};
+use serde::{Serialize, Deserialize};
 
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
@@ -151,5 +152,18 @@ pub struct TimeRangeFilter {
 pub struct PaginationArgs {
     pub first: Option<i32>,
     pub after: Option<String>,
+}
+
+#[derive(Clone, SimpleObject)]
+pub struct ContractEvents {
+    pub contract_address: String,
+    pub events: EventConnection,
+}
+
+#[derive(Clone, SimpleObject)]
+pub struct MultiContractEventsConnection {
+    pub contracts: Vec<ContractEvents>,
+    pub total_contracts: i32,
+    pub total_events: i32,
 }
 

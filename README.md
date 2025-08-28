@@ -6,6 +6,7 @@ A Rust-based Starknet event indexer with REST and GraphQL APIs for fetching and 
 
 ### Core Architecture
 - **Background Indexer**: Continuously monitors the blockchain for new events from specified contracts
+- **Multi-Contract Support**: Index multiple contracts simultaneously using allow lists
 - **Database Storage**: SQLite database for persistent event storage with advanced filtering
 - **Real-time APIs**: REST and GraphQL endpoints for querying indexed events
 - **Address Normalization**: Automatically normalizes Starknet addresses (e.g., `0x02` and `0x2` are treated as the same)
@@ -31,11 +32,14 @@ A Rust-based Starknet event indexer with REST and GraphQL APIs for fetching and 
 # Start with default settings
 cargo run
 
-# Start with specific contract
-cargo run -- --contract-address 0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e
+# Start with single contract
+cargo run -- --allow-list "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e"
 
 # Start from a specific block (faster sync)
-cargo run -- --contract-address 0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e --start-block 1866762
+cargo run -- --allow-list "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e" --start-block 1866762
+
+# Start with multiple contracts
+cargo run -- --allow-list "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e,0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
 ```
 
 ## Configuration
@@ -43,7 +47,8 @@ cargo run -- --contract-address 0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84
 ### Environment Variables
 ```bash
 RPC_URL=https://starknet-mainnet.public.blastapi.io  # Starknet RPC endpoint
-CONTRACT_ADDRESS=0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e  # Contract to index
+CONTRACT_ALLOW_LIST=0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e  # Single contract to index
+# CONTRACT_ALLOW_LIST=0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e,0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d  # Multiple contracts to index
 DATABASE_URL=sqlite:events.db  # Database file location
 ```
 
@@ -53,7 +58,7 @@ cargo run -- --help
 
 # Available options:
 --rpc-url <URL>               # RPC URL (overrides RPC_URL env)
---contract-address <ADDRESS>  # Contract address (overrides CONTRACT_ADDRESS env)
+--allow-list <ADDRESSES>      # Comma-separated list of contract addresses to index (overrides CONTRACT_ALLOW_LIST env)
 --start-block <BLOCK>         # Start indexing from this block number
 --chunk-size <SIZE>           # Blocks per chunk (default: 2000)
 --sync-interval <SECONDS>     # Continuous sync interval (default: 2)
@@ -61,6 +66,209 @@ cargo run -- --help
 --event-types <TYPES>         # Comma-separated event types to filter
 --batch-mode                  # Enable batch processing
 --max-retries <RETRIES>       # Max RPC retries (default: 3)
+```
+
+### Contract Configuration
+
+The indexer supports indexing single or multiple contracts using a unified configuration approach. Simply provide contracts in the format `address:start_block` in a comma-separated list. **All addresses are automatically validated and normalized** to ensure consistency and prevent errors.
+
+#### Using Contract Configuration
+
+**Command Line:**
+```bash
+# Single contract (starts from block 0)
+cargo run -- --contract-config "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:0"
+
+# Single contract with specific start block
+cargo run -- --contract-config "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:1900000"
+
+# Multiple contracts with different start blocks
+cargo run -- --contract-config "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:1900000,0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d:1901000"
+
+# With filtering
+cargo run -- --contract-config "0x1234:0,0x5678:0" --event-types "Transfer,Approval"
+```
+
+#### Address Validation and Normalization
+
+All contract addresses are automatically validated and normalized:
+
+- **Validation**: Ensures addresses start with `0x` and contain valid hexadecimal characters
+- **Normalization**: Pads addresses to 64 characters (32 bytes) with leading zeros
+- **Error Handling**: Invalid addresses cause the indexer to exit with a clear error message
+
+**Examples:**
+```bash
+# These addresses are automatically normalized:
+0x123 → 0x0000000000000000000000000000000000000000000000000000000000000123
+0x1   → 0x0000000000000000000000000000000000000000000000000000000000000001
+0xabc → 0x0000000000000000000000000000000000000000000000000000000000000abc
+
+# Invalid addresses will cause errors:
+❌ invalid_address → "contract address must start with 0x"
+❌ 0xinvalid      → "contract address must be hexadecimal"
+```
+
+#### Start Block Configuration
+
+Each contract can have its own start block specified in the configuration:
+
+**Format:** `address:start_block,address:start_block`
+
+**Examples:**
+```bash
+# Command line
+cargo run -- --contract-config "0x123:1900000,0x456:1901000,0x789:1902000"
+
+# Environment variable
+export CONTRACT_CONFIG="0x123:1900000,0x456:1901000,0x789:1902000"
+cargo run
+```
+
+**Benefits:**
+- **Flexible Sync**: Start indexing different contracts from different blocks
+- **Performance**: Skip historical data for contracts that don't need it
+- **Selective Indexing**: Only index recent events for certain contracts
+- **Fallback**: Use `--start-block` for global default, or default to block 0
+- **Rate Limiting**: Automatic staggered startup and retry logic to prevent RPC rate limits
+
+**Priority Order:**
+1. Contract-specific start block (from `--contract-config`)
+2. Global start block (from `--start-block`)
+3. Default (block 0)
+
+**Rate Limiting Features:**
+- **Staggered Startup**: Multiple contracts start with 2-second delays to avoid overwhelming RPC
+- **Exponential Backoff**: Automatic retry with increasing delays on rate limit errors
+- **RPC Throttling**: Built-in delays between requests to prevent 429 errors
+
+**Environment Variable:**
+```bash
+# Single contract (starts from block 0)
+export CONTRACT_CONFIG="0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:0"
+
+# Single contract with specific start block
+export CONTRACT_CONFIG="0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:1900000"
+
+# Multiple contracts with different start blocks
+export CONTRACT_CONFIG="0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e:1900000,0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d:1901000"
+
+# Addresses are automatically normalized (e.g., 0x123 becomes 0x0000000000000000000000000000000000000000000000000000000000000123)
+cargo run
+```
+
+#### GraphQL Multi-Contract Queries
+
+Query events from multiple contracts with clear separation by contract address:
+
+##### ⭐ **Recommended: Grouped by Contract**
+```graphql
+query GetEventsByContract($addresses: [String!]!) {
+  eventsByContract(
+    contractAddresses: $addresses
+    first: 5
+    eventTypes: ["Transfer", "Approval"]
+  ) {
+    contracts {
+      contractAddress
+      events {
+        edges {
+          node {
+            id
+            eventType
+            blockNumber
+            transactionHash
+            decodedData { json }
+          }
+        }
+        totalCount
+      }
+    }
+    totalContracts
+    totalEvents
+  }
+}
+```
+
+**Example Response:**
+```json
+{
+  "data": {
+    "eventsByContract": {
+      "contracts": [
+        {
+          "contractAddress": "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e",
+          "events": {
+            "edges": [
+              {
+                "node": {
+                  "id": "0x40055e1c78f993a6adaa21674832ea28ee3ddc7f235b3c9d280478b721c8ecd:56",
+                  "eventType": "U8Event",
+                  "blockNumber": "1867957",
+                  "transactionHash": "0x40055e1c78f993a6adaa21674832ea28ee3ddc7f235b3c9d280478b721c8ecd",
+                  "decodedData": {
+                    "json": "{\"_keys\":[\"0x1b3f460470a2db288f8bf618e8a6680d13b76f4aad6ab571a741264e1b0d6c2\"]}"
+                  }
+                }
+              }
+            ],
+            "totalCount": 57
+          }
+        },
+        {
+          "contractAddress": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+          "events": {
+            "edges": [
+              {
+                "node": {
+                  "id": "0x278c4df4d38e3235fd4d97d1b28126cf20ec793618b344c16ccdca0471366:32",
+                  "eventType": "Transfer",
+                  "blockNumber": "1904725",
+                  "transactionHash": "0x278c4df4d38e3235fd4d97d1b28126cf20ec793618b344c16ccdca0471366",
+                  "decodedData": {
+                    "json": "{\"from\":\"0x20d7fb2face98b97dbcd35c228adcd3dbb8b89915fa5af740b5b34548a9b5e1\",\"to\":\"0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8\",\"value\":\"0x41a13074db00\"}"
+                  }
+                }
+              }
+            ],
+            "totalCount": 4675
+          }
+        }
+      ],
+      "totalContracts": 2,
+      "totalEvents": 4732
+    }
+  }
+}
+```
+
+**Benefits:**
+- ✅ **Clear Separation**: Each contract has its own section
+- ✅ **Easy Processing**: No need to check `contractAddress` field in each event
+- ✅ **Per-Contract Stats**: Each contract shows its own `totalCount`
+- ✅ **Better Performance**: Events queried per contract with parallel processing
+
+##### **Legacy: Flat List (Still Available)**
+```graphql
+query GetMultiContractEvents($addresses: [String!]!) {
+  eventsMultiContract(
+    contractAddresses: $addresses
+    first: 10
+    eventTypes: ["Transfer"]
+  ) {
+    totalCount
+    edges {
+      node {
+        id
+        contractAddress
+        eventType
+        blockNumber
+        transactionHash
+        decodedData { json }
+      }
+    }
+  }
+}
 ```
 
 ### Advanced Usage Examples
@@ -80,13 +288,16 @@ cargo run -- \
 #### Filtered Indexing
 ```bash
 # Only index Transfer events
-cargo run -- --event-types "Transfer" --contract-address 0x...
+cargo run -- --event-types "Transfer" --allow-list "0x..."
 
 # Only index events with specific keys
-cargo run -- --event-keys "0x1234,0x5678" --contract-address 0x...
+cargo run -- --event-keys "0x1234,0x5678" --allow-list "0x..."
 
 # Start from recent block for faster sync
-cargo run -- --start-block 1900000 --contract-address 0x...
+cargo run -- --start-block 1900000 --allow-list "0x..."
+
+# Index multiple contracts with filtering
+cargo run -- --allow-list "0x1234,0x5678" --event-types "Transfer,Approval"
 ```
 
 ## API Endpoints
@@ -246,6 +457,41 @@ query GetStats($addr: String!) {
 }
 ```
 
+#### Multi-Contract Event Query
+```graphql
+query GetMultiContractEvents($addresses: [String!]!) {
+  eventsMultiContract(
+    contractAddresses: $addresses
+    first: 10
+    eventTypes: ["Transfer", "Approval"]
+  ) {
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges {
+      cursor
+      node {
+        id
+        contractAddress
+        eventType
+        blockNumber
+        transactionHash
+        decodedData { json }
+      }
+    }
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "addresses": [
+    "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e",
+    "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
+  ]
+}
+```
+
 #### Subscription (Polling-Based)
 ```graphql
 subscription OnEvents($addr: String!) {
@@ -304,7 +550,6 @@ CREATE TABLE indexer_state (
 
 ### Limitations
 - **Polling-Based Subscriptions**: Not true real-time WebSocket events
-- **Single Contract**: Indexes one contract at a time
 - **SQLite Storage**: Not suitable for high-volume production use
 - **Memory Usage**: All events loaded into memory for complex filtering
 
@@ -354,7 +599,6 @@ cargo run -- --contract-address 0x... --start-block 1866762
 - **Polling**: Subscriptions use polling, not real-time events
 
 ### Recommended Improvements
-- **Multi-Contract Support**: Index multiple contracts simultaneously
 - **PostgreSQL**: Use proper database for production
 - **True WebSocket**: Implement real-time event streaming
 - **Horizontal Scaling**: Support multiple indexer instances
@@ -369,7 +613,7 @@ cargo run -- --contract-address 0x... --start-block 1866762
 ## Troubleshooting
 
 ### Common Issues
-1. **Rate Limiting**: Increase delays or use better RPC endpoint
+1. **Rate Limiting**: Multiple contracts are automatically staggered to prevent RPC rate limits. If you still see 429 errors, try using a different RPC endpoint or increasing delays.
 2. **Memory Usage**: Reduce chunk size or add event filtering
 3. **Slow Sync**: Use `--start-block` to skip historical data
 4. **RPC Errors**: Increase `--max-retries` or check RPC endpoint
