@@ -85,6 +85,7 @@ impl EventQueryRoot {
         #[graphql(name = "transactionHash")] transaction_hash: Option<String>,
         first: Option<i32>,
         after: Option<String>,
+        #[graphql(name = "orderBy")] order_by: Option<crate::graphql::types::EventOrderBy>,
     ) -> GqlResult<EventConnection> {
         let database = ctx.data::<Arc<Database>>()?.clone();
         let limit = first.unwrap_or(10).clamp(1, 100);
@@ -120,6 +121,7 @@ impl EventQueryRoot {
             transaction_hash.as_deref(),
             limit,
             offset,
+            order_by,
         ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
 
         // Get total count for pagination (simplified for now)
@@ -183,7 +185,7 @@ impl EventQueryRoot {
         
         // Extract filters
         let filters = args.filters.unwrap_or_default();
-        let pagination = args.pagination.unwrap_or_default();
+        let pagination = args.pagination.clone().unwrap_or_default();
         
         let limit = pagination.first.unwrap_or(10).clamp(1, 100);
         let offset = pagination.after.as_ref()
@@ -226,6 +228,7 @@ impl EventQueryRoot {
             filters.transaction_hash.as_deref(),
             limit,
             offset,
+            args.pagination.as_ref().and_then(|p| p.order_by),
         ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
 
         // Get total count for pagination (simplified for now)
@@ -450,6 +453,7 @@ impl EventQueryRoot {
                 transaction_hash.as_deref(),
                 limit,
                 offset,
+                None, // Default ordering for individual contracts
             ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_address, e)))?;
 
             // Get total count for this contract

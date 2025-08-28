@@ -143,11 +143,21 @@ pub struct TimeRangeFilter {
     pub to_timestamp: Option<String>,
 }
 
-#[derive(InputObject, Default)]
+#[derive(InputObject, Default, Clone)]
 #[graphql(rename_fields = "camelCase")]
 pub struct PaginationArgs {
     pub first: Option<i32>,
     pub after: Option<String>,
+    pub order_by: Option<EventOrderBy>,
+}
+
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Default)]
+pub enum EventOrderBy {
+    #[default]
+    BlockNumberDesc, // Latest to oldest (default)
+    BlockNumberAsc,  // Oldest to latest
+    TimestampDesc,   // Latest to oldest by timestamp
+    TimestampAsc,    // Oldest to latest by timestamp
 }
 
 #[derive(Clone, SimpleObject)]
