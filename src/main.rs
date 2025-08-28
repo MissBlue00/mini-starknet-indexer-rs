@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::env;
+use std::sync::Arc;
 use reqwest::Client;
 use async_graphql::http::GraphiQLSource;
 use async_graphql_axum::{GraphQL, GraphQLSubscription};
@@ -19,6 +20,7 @@ mod graphql;
 mod starknet;
 mod database;
 mod indexer;
+mod realtime;
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]
@@ -560,9 +562,10 @@ async fn main() {
             .expect("Failed to initialize database")
     );
     
-    // Build GraphQL schema with database
+    // Build GraphQL schema with database and real-time event manager
     let rpc = crate::starknet::RpcContext::from_env();
-    let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone());
+    let realtime_manager = Arc::new(crate::realtime::RealtimeEventManager::new());
+    let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone(), realtime_manager.clone());
 
     // Build our application with routes
     let app = Router::new()
@@ -601,6 +604,7 @@ async fn main() {
                 indexer_database,
                 indexer_rpc,
                 indexer_config_clone,
+                Some(realtime_manager.clone()),
             ).await;
         }))
     } else {
@@ -613,6 +617,7 @@ async fn main() {
     println!("   📊 GraphQL Playground: http://localhost:3000/graphql");
     println!("   🔍 GraphiQL Interface: http://localhost:3000/graphiql");
     println!("   📈 Sync Status API: http://localhost:3000/sync-status");
+    println!("   🔌 WebSocket Subscriptions: ws://localhost:3000/ws");
 
     // Wait for either service to complete (they should run indefinitely)
     if let Some(indexer) = indexer_handle {
