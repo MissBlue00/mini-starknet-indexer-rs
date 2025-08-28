@@ -26,10 +26,10 @@ struct CliArgs {
     #[arg(long, value_name = "URL", value_parser = parse_url, help = "RPC URL for Starknet JSON-RPC (overrides RPC_URL env)")]
     rpc_url: Option<String>,
 
-    #[arg(long, value_name = "ADDRESS", value_parser = parse_contract_address, help = "Default contract address for REST fetch (overrides CONTRACT_ADDRESS env)")]
-    contract_address: Option<String>,
+    #[arg(long, value_name = "CONFIG", help = "Contract configuration: address:start_block,address:start_block (overrides CONTRACT_CONFIG env)")]
+    contract_config: Option<String>,
 
-    #[arg(long, value_name = "BLOCK", help = "Start indexing from this block number (overrides START_BLOCK env)")]
+    #[arg(long, value_name = "BLOCK", help = "Start indexing from this block number for all contracts (overrides START_BLOCK env)")]
     start_block: Option<u64>,
 
     #[arg(long, value_name = "SIZE", default_value = "2000", help = "Number of blocks to process in each chunk")]
@@ -57,6 +57,8 @@ fn parse_url(s: &str) -> Result<String, String> {
         .map_err(|e| format!("invalid URL: {}", e))
 }
 
+// Contract address parsing and normalization functions for REST API
+#[allow(dead_code)]
 fn parse_contract_address(s: &str) -> Result<String, String> {
     if !s.starts_with("0x") {
         return Err("contract address must start with 0x".to_string());
@@ -74,6 +76,7 @@ fn parse_contract_address(s: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+#[allow(dead_code)]
 fn normalize_starknet_address(address: &str) -> String {
     // Remove 0x prefix
     let hex = &address[2..];
@@ -91,11 +94,29 @@ fn normalize_starknet_address(address: &str) -> String {
     format!("0x{}", padded)
 }
 
-#[derive(Serialize, Deserialize)]
-struct MockResponse {
-    status: String,
-    data: String,
+fn parse_contract_config(s: &str) -> Result<crate::indexer::ContractConfig, String> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 2 {
+        return Err("contract config must be in format 'address:start_block'".to_string());
+    }
+    
+    let address = parts[0].trim();
+    let start_block_str = parts[1].trim();
+    
+    // Parse and normalize address
+    let normalized_address = parse_contract_address(address)?;
+    
+    // Parse start block
+    let start_block = start_block_str.parse::<u64>()
+        .map_err(|_| format!("invalid start block '{}': must be a number", start_block_str))?;
+    
+    Ok(crate::indexer::ContractConfig {
+        address: normalized_address,
+        start_block: Some(start_block),
+    })
 }
+
+
 
 // Starknet RPC request structures
 #[derive(Serialize, Deserialize)]
@@ -240,7 +261,17 @@ async fn fetch_starknet_events_handler(
         (req.address, req.chunk_size)
     } else {
         // Use default values if no JSON body provided
-        let address = env::var("CONTRACT_ADDRESS").unwrap_or_else(|_| "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d".to_string());
+        // Get first contract from CONTRACT_CONFIG or use default
+        let address = if let Ok(contract_config) = env::var("CONTRACT_CONFIG") {
+            contract_config.split(',')
+                .next()
+                .map(|s| s.trim())
+                .and_then(|s| parse_contract_config(s).ok())
+                .map(|config| config.address)
+                .unwrap_or_else(|| "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d".to_string())
+        } else {
+            "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d".to_string()
+        };
         let chunk_size = 10;
         (address, chunk_size)
     };
@@ -443,9 +474,7 @@ async fn main() {
     if let Some(url) = cli.rpc_url.as_deref() {
         env::set_var("RPC_URL", url);
     }
-    if let Some(addr) = cli.contract_address.as_deref() {
-        env::set_var("CONTRACT_ADDRESS", addr);
-    }
+
     
     // Create indexer configuration from CLI args
     let mut indexer_config = crate::indexer::IndexerConfig::default();
@@ -478,6 +507,49 @@ async fn main() {
     if let Some(max_retries) = cli.max_retries {
         indexer_config.max_retries = max_retries;
         println!("🔧 Using max retries: {}", max_retries);
+    }
+    
+    // Parse contract configuration from CLI or environment
+    if let Some(contract_config_str) = cli.contract_config.as_deref() {
+        let mut contract_configs = Vec::new();
+        for config_str in contract_config_str.split(',') {
+            let trimmed = config_str.trim();
+            if !trimmed.is_empty() {
+                match parse_contract_config(trimmed) {
+                    Ok(config) => contract_configs.push(config),
+                    Err(e) => {
+                        eprintln!("❌ Invalid contract config '{}': {}", trimmed, e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        if !contract_configs.is_empty() {
+            indexer_config.contract_configs = Some(contract_configs.clone());
+            let addresses: Vec<String> = contract_configs.iter().map(|c| c.address.clone()).collect();
+            indexer_config.allow_list = Some(addresses.clone());
+            println!("🔧 Using contract configs: {:?}", contract_configs.iter().map(|c| format!("{}:{}", c.address, c.start_block.unwrap_or(0))).collect::<Vec<_>>());
+        }
+    } else if let Ok(contract_config_env) = env::var("CONTRACT_CONFIG") {
+        let mut contract_configs = Vec::new();
+        for config_str in contract_config_env.split(',') {
+            let trimmed = config_str.trim();
+            if !trimmed.is_empty() {
+                match parse_contract_config(trimmed) {
+                    Ok(config) => contract_configs.push(config),
+                    Err(e) => {
+                        eprintln!("❌ Invalid contract config '{}': {}", trimmed, e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        if !contract_configs.is_empty() {
+            indexer_config.contract_configs = Some(contract_configs.clone());
+            let addresses: Vec<String> = contract_configs.iter().map(|c| c.address.clone()).collect();
+            indexer_config.allow_list = Some(addresses.clone());
+            println!("🔧 Using contract configs from env: {:?}", contract_configs.iter().map(|c| format!("{}:{}", c.address, c.start_block.unwrap_or(0))).collect::<Vec<_>>());
+        }
     }
     
     // Initialize database
@@ -516,24 +588,23 @@ async fn main() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Start background indexer for default contract if specified
-    let indexer_handle = if let Ok(contract_address) = env::var("CONTRACT_ADDRESS") {
-        println!("🚀 Starting background indexer for contract: {}", contract_address);
+    // Start background indexer for contracts
+    let indexer_handle = if let Some(allow_list) = &indexer_config.allow_list {
+        // Multi-contract indexing mode
+        println!("🚀 Starting background indexer for {} contracts", allow_list.len());
         let indexer_database = database.clone();
         let indexer_rpc = rpc.clone();
-        let indexer_contract = contract_address.clone();
         let indexer_config_clone = indexer_config.clone();
         
         Some(tokio::spawn(async move {
-            crate::indexer::start_background_indexer(
+            crate::indexer::start_multi_contract_background_indexer(
                 indexer_database,
                 indexer_rpc,
-                indexer_contract,
-                Some(indexer_config_clone),
+                indexer_config_clone,
             ).await;
         }))
     } else {
-        println!("ℹ️  No CONTRACT_ADDRESS env var set - background indexer not started");
+        println!("ℹ️  No CONTRACT_CONFIG env var set - background indexer not started");
         println!("   GraphQL queries will work but may be slower without pre-indexed data");
         None
     };
@@ -559,16 +630,43 @@ async fn sync_status_handler(
 ) -> Json<serde_json::Value> {
     use serde_json::json;
     
-    // Get contract address from env
-    let contract_address = match std::env::var("CONTRACT_ADDRESS") {
-        Ok(addr) => addr,
+    // Get and normalize contract addresses from env
+    let contract_addresses = match std::env::var("CONTRACT_CONFIG") {
+        Ok(contract_config) => {
+            let mut addresses = Vec::new();
+            for config_str in contract_config.split(',') {
+                let trimmed = config_str.trim();
+                if !trimmed.is_empty() {
+                    match parse_contract_config(trimmed) {
+                        Ok(config) => addresses.push(config.address),
+                        Err(e) => {
+                            return Json(json!({
+                                "status": "error",
+                                "message": format!("Invalid contract config '{}': {}", trimmed, e)
+                            }));
+                        }
+                    }
+                }
+            }
+            addresses
+        },
         Err(_) => {
             return Json(json!({
                 "status": "error",
-                "message": "No CONTRACT_ADDRESS configured"
+                "message": "No CONTRACT_CONFIG configured"
             }));
         }
     };
+    
+    if contract_addresses.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "No contract addresses found in CONTRACT_CONFIG"
+        }));
+    }
+    
+    // For now, show status for the first contract (can be enhanced to show all)
+    let contract_address = &contract_addresses[0];
 
     // Get current block from network
     let current_block = match crate::starknet::get_current_block_number(&rpc).await {

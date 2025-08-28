@@ -20,19 +20,41 @@ impl RpcContext {
 }
 
 pub async fn rpc_call(ctx: &RpcContext, payload: &Value) -> Result<Value, String> {
-    let res = ctx
-        .http
-        .post(&ctx.rpc_url)
-        .json(payload)
-        .send()
-        .await
-        .map_err(|e| format!("network error: {}", e))?;
-    let status = res.status();
-    let body_text = res.text().await.map_err(|e| format!("body error: {}", e))?;
-    if !status.is_success() {
-        return Err(format!("rpc status {}: {}", status, body_text));
+    let max_retries = 3;
+    let mut attempt = 0;
+    
+    loop {
+        attempt += 1;
+        
+        let res = ctx
+            .http
+            .post(&ctx.rpc_url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| format!("network error: {}", e))?;
+        
+        let status = res.status();
+        let body_text = res.text().await.map_err(|e| format!("body error: {}", e))?;
+        
+        // Check if we got a rate limit error
+        if status == 429 {
+            if attempt <= max_retries {
+                let delay = std::cmp::min(2u64.pow(attempt as u32), 30); // Exponential backoff, max 30 seconds
+                eprintln!("⚠️  Rate limited (attempt {}/{}), waiting {} seconds...", attempt, max_retries, delay);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                continue;
+            } else {
+                return Err(format!("rpc status {} after {} retries: {}", status, max_retries, body_text));
+            }
+        }
+        
+        if !status.is_success() {
+            return Err(format!("rpc status {}: {}", status, body_text));
+        }
+        
+        return serde_json::from_str(&body_text).map_err(|e| format!("json parse error: {} | body={} ", e, body_text));
     }
-    serde_json::from_str(&body_text).map_err(|e| format!("json parse error: {} | body={} ", e, body_text))
 }
 
 pub async fn get_contract_class(ctx: &RpcContext, address: &str) -> Result<Value, String> {

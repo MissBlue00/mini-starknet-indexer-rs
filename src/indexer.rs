@@ -6,6 +6,12 @@ use tokio::time::{sleep, Duration, Instant};
 use std::sync::Arc;
 
 #[derive(Clone)]
+pub struct ContractConfig {
+    pub address: String,
+    pub start_block: Option<u64>,
+}
+
+#[derive(Clone)]
 pub struct IndexerConfig {
     pub start_block: Option<u64>,
     pub chunk_size: u64,
@@ -14,6 +20,8 @@ pub struct IndexerConfig {
     pub event_types: Option<Vec<String>>,
     pub batch_mode: bool,
     pub max_retries: u32,
+    pub allow_list: Option<Vec<String>>, // Added for multi-contract indexing
+    pub contract_configs: Option<Vec<ContractConfig>>, // Per-contract configuration
 }
 
 impl Default for IndexerConfig {
@@ -26,6 +34,8 @@ impl Default for IndexerConfig {
             event_types: None,
             batch_mode: false,
             max_retries: 3,
+            allow_list: None,
+            contract_configs: None,
         }
     }
 }
@@ -35,6 +45,65 @@ pub struct BlockchainIndexer {
     rpc: RpcContext,
     contract_address: String,
     config: IndexerConfig,
+}
+
+// New struct for handling multiple contracts
+pub struct MultiContractIndexer {
+    database: Arc<Database>,
+    rpc: RpcContext,
+    config: IndexerConfig,
+}
+
+impl MultiContractIndexer {
+    pub fn new(database: Arc<Database>, rpc: RpcContext, config: IndexerConfig) -> Self {
+        Self {
+            database,
+            rpc,
+            config,
+        }
+    }
+
+    pub async fn start_syncing_all(&self) {
+        if let Some(allow_list) = &self.config.allow_list {
+            println!("🚀 Starting multi-contract indexer for {} contracts", allow_list.len());
+            println!("⏱️  Staggering startup to avoid RPC rate limits...");
+            
+            // Start individual indexers for each contract with staggered delays
+            let mut handles = Vec::new();
+            
+            for (index, contract_address) in allow_list.iter().enumerate() {
+                let database = self.database.clone();
+                let rpc = self.rpc.clone();
+                let config = self.config.clone();
+                let contract = contract_address.clone();
+                
+                // Stagger startup by 2 seconds per contract to avoid rate limits
+                let delay_seconds = index as u64 * 2;
+                
+                let handle = tokio::spawn(async move {
+                    // Wait before starting this indexer
+                    if delay_seconds > 0 {
+                        println!("⏳ Starting indexer for {} in {} seconds...", contract, delay_seconds);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(delay_seconds)).await;
+                    }
+                    
+                    let indexer = BlockchainIndexer::new(database, rpc, contract, Some(config));
+                    indexer.start_syncing().await;
+                });
+                
+                handles.push(handle);
+            }
+            
+            // Wait for all indexers to complete (they should run indefinitely)
+            for handle in handles {
+                if let Err(e) = handle.await {
+                    eprintln!("❌ Indexer task failed: {}", e);
+                }
+            }
+        } else {
+            eprintln!("❌ No allow list configured for multi-contract indexer");
+        }
+    }
 }
 
 impl BlockchainIndexer {
@@ -61,11 +130,21 @@ impl BlockchainIndexer {
             }
         };
 
+        // Get contract-specific start block or use global start block
+        let contract_start_block = if let Some(contract_configs) = &self.config.contract_configs {
+            contract_configs.iter()
+                .find(|c| c.address == self.contract_address)
+                .and_then(|c| c.start_block)
+                .or(self.config.start_block)
+        } else {
+            self.config.start_block
+        };
+
         // Get last synced block or use configured start block
         let last_synced = match self.database.get_indexer_state(&self.contract_address).await {
             Ok(Some(state)) => {
                 // If a start block is configured and it's higher than the last synced block, use the start block
-                if let Some(start_block) = self.config.start_block {
+                if let Some(start_block) = contract_start_block {
                     if start_block > state.last_synced_block {
                         println!("🔄 Using configured start block {} (higher than last synced {})", start_block, state.last_synced_block);
                         start_block
@@ -78,7 +157,7 @@ impl BlockchainIndexer {
             }
             Ok(None) => {
                 // If no state exists, use configured start block or default to 0
-                let start_block = self.config.start_block.unwrap_or(0);
+                let start_block = contract_start_block.unwrap_or(0);
                 println!("🆕 New contract - starting from block {}", start_block);
                 start_block
             }
@@ -148,11 +227,21 @@ impl BlockchainIndexer {
     async fn sync_historical_data(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("📚 Starting historical data sync for contract: {}", self.contract_address);
         
+        // Get contract-specific start block or use global start block
+        let contract_start_block = if let Some(contract_configs) = &self.config.contract_configs {
+            contract_configs.iter()
+                .find(|c| c.address == self.contract_address)
+                .and_then(|c| c.start_block)
+                .or(self.config.start_block)
+        } else {
+            self.config.start_block
+        };
+
         // Get the last synced block for this contract
         let last_synced = match self.database.get_indexer_state(&self.contract_address).await? {
             Some(state) => {
                 // If a start block is configured and it's higher than the last synced block, use the start block
-                if let Some(start_block) = self.config.start_block {
+                if let Some(start_block) = contract_start_block {
                     if start_block > state.last_synced_block {
                         println!("🔄 Using configured start block {} (higher than last synced {})", start_block, state.last_synced_block);
                         start_block
@@ -165,7 +254,7 @@ impl BlockchainIndexer {
             }
             None => {
                 // If no state exists, use configured start block or default to 0
-                let start_block = self.config.start_block.unwrap_or(0);
+                let start_block = contract_start_block.unwrap_or(0);
                 println!("🆕 New contract - starting from block {}", start_block);
                 start_block
             }
@@ -270,12 +359,15 @@ impl BlockchainIndexer {
                 }
             }
             
-            // Sleep for 2 seconds, but account for processing time
+            // Sleep for sync interval, but account for processing time
             let elapsed = start_time.elapsed();
-            let sleep_duration = Duration::from_secs(2).saturating_sub(elapsed);
+            let sleep_duration = Duration::from_secs(self.config.sync_interval).saturating_sub(elapsed);
             if sleep_duration > Duration::from_millis(100) {
                 sleep(sleep_duration).await;
             }
+            
+            // Add a small delay to prevent overwhelming the RPC endpoint
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
     }
 
@@ -428,6 +520,8 @@ impl BlockchainIndexer {
     }
 }
 
+// Single contract background indexer (kept for REST API compatibility)
+#[allow(dead_code)]
 pub async fn start_background_indexer(
     database: Arc<Database>,
     rpc: RpcContext,
@@ -436,4 +530,13 @@ pub async fn start_background_indexer(
 ) {
     let indexer = BlockchainIndexer::new(database, rpc, contract_address, config);
     indexer.start_syncing().await;
+}
+
+pub async fn start_multi_contract_background_indexer(
+    database: Arc<Database>,
+    rpc: RpcContext,
+    config: IndexerConfig,
+) {
+    let indexer = MultiContractIndexer::new(database, rpc, config);
+    indexer.start_syncing_all().await;
 }

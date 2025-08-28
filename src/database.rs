@@ -421,4 +421,48 @@ impl Database {
             }
         }))
     }
+
+    pub async fn get_events_from_multiple_contracts(
+        &self,
+        contract_addresses: &[String],
+        event_types: Option<&[String]>,
+        event_keys: Option<&[String]>,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        from_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        to_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        transaction_hash: Option<&str>,
+        limit: i32,
+        offset: i32,
+    ) -> Result<Vec<EventRecord>, sqlx::Error> {
+        let mut all_events = Vec::new();
+        
+        for contract_address in contract_addresses {
+            let events = self.get_events_with_advanced_filters(
+                contract_address,
+                event_types,
+                event_keys,
+                from_block,
+                to_block,
+                from_timestamp,
+                to_timestamp,
+                transaction_hash,
+                limit,
+                offset,
+            ).await?;
+            
+            all_events.extend(events);
+        }
+        
+        // Sort by block number and log index (newest first)
+        all_events.sort_by(|a, b| {
+            b.block_number.cmp(&a.block_number)
+                .then(b.log_index.cmp(&a.log_index))
+        });
+        
+        // Apply limit to the combined results
+        all_events.truncate(limit as usize);
+        
+        Ok(all_events)
+    }
 }
