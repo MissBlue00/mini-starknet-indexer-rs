@@ -28,6 +28,27 @@ struct CliArgs {
 
     #[arg(long, value_name = "ADDRESS", value_parser = parse_contract_address, help = "Default contract address for REST fetch (overrides CONTRACT_ADDRESS env)")]
     contract_address: Option<String>,
+
+    #[arg(long, value_name = "BLOCK", help = "Start indexing from this block number (overrides START_BLOCK env)")]
+    start_block: Option<u64>,
+
+    #[arg(long, value_name = "SIZE", default_value = "2000", help = "Number of blocks to process in each chunk")]
+    chunk_size: Option<u64>,
+
+    #[arg(long, value_name = "SECONDS", default_value = "2", help = "Interval between sync checks in seconds")]
+    sync_interval: Option<u64>,
+
+    #[arg(long, value_name = "KEYS", help = "Comma-separated list of event keys to filter for")]
+    event_keys: Option<String>,
+
+    #[arg(long, value_name = "TYPES", help = "Comma-separated list of event types to filter for")]
+    event_types: Option<String>,
+
+    #[arg(long, help = "Enable batch processing for better performance")]
+    batch_mode: bool,
+
+    #[arg(long, value_name = "RETRIES", default_value = "3", help = "Number of retries for failed RPC calls")]
+    max_retries: Option<u32>,
 }
 
 fn parse_url(s: &str) -> Result<String, String> {
@@ -47,7 +68,27 @@ fn parse_contract_address(s: &str) -> Result<String, String> {
     if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("contract address must be hexadecimal".to_string());
     }
-    Ok(s.to_string())
+    
+    // Normalize the address by removing leading zeros and ensuring consistent format
+    let normalized = normalize_starknet_address(s);
+    Ok(normalized)
+}
+
+fn normalize_starknet_address(address: &str) -> String {
+    // Remove 0x prefix
+    let hex = &address[2..];
+    
+    // Remove leading zeros
+    let trimmed = hex.trim_start_matches('0');
+    
+    // If all zeros were removed, keep at least one zero
+    let hex_part = if trimmed.is_empty() { "0" } else { trimmed };
+    
+    // Ensure the address is 64 characters (32 bytes) by padding with leading zeros
+    let padded = format!("{:0>64}", hex_part);
+    
+    // Return with 0x prefix
+    format!("0x{}", padded)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -406,6 +447,39 @@ async fn main() {
         env::set_var("CONTRACT_ADDRESS", addr);
     }
     
+    // Create indexer configuration from CLI args
+    let mut indexer_config = crate::indexer::IndexerConfig::default();
+    
+    // Override with CLI values if provided
+    if let Some(start_block) = cli.start_block {
+        indexer_config.start_block = Some(start_block);
+        println!("🔧 Using start block: {}", start_block);
+    }
+    if let Some(chunk_size) = cli.chunk_size {
+        indexer_config.chunk_size = chunk_size;
+        println!("🔧 Using chunk size: {}", chunk_size);
+    }
+    if let Some(sync_interval) = cli.sync_interval {
+        indexer_config.sync_interval = sync_interval;
+        println!("🔧 Using sync interval: {}s", sync_interval);
+    }
+    if let Some(event_keys) = cli.event_keys {
+        indexer_config.event_keys = Some(event_keys.split(',').map(|s| s.trim().to_string()).collect());
+        println!("🔧 Using event keys filter: {:?}", indexer_config.event_keys);
+    }
+    if let Some(event_types) = cli.event_types {
+        indexer_config.event_types = Some(event_types.split(',').map(|s| s.trim().to_string()).collect());
+        println!("🔧 Using event types filter: {:?}", indexer_config.event_types);
+    }
+    if cli.batch_mode {
+        indexer_config.batch_mode = true;
+        println!("🔧 Batch mode enabled");
+    }
+    if let Some(max_retries) = cli.max_retries {
+        indexer_config.max_retries = max_retries;
+        println!("🔧 Using max retries: {}", max_retries);
+    }
+    
     // Initialize database
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:events.db".to_string());
     let database = std::sync::Arc::new(
@@ -424,6 +498,7 @@ async fn main() {
         .route("/test", get(test_json_handler))
         .route("/get-abi/:contract_address", get(get_contract_abi_handler))
         .route("/sync-status", get(sync_status_handler))
+        .route("/stats/:contract_address", get(indexer_stats_handler))
         // GraphQL: POST for queries/mutations, GET for GraphiQL interface, separate WS endpoint for subscriptions
         .route("/graphql", post_service(GraphQL::new(schema.clone())))
         .route("/graphql", get(graphiql_handler))
@@ -447,12 +522,14 @@ async fn main() {
         let indexer_database = database.clone();
         let indexer_rpc = rpc.clone();
         let indexer_contract = contract_address.clone();
+        let indexer_config_clone = indexer_config.clone();
         
         Some(tokio::spawn(async move {
             crate::indexer::start_background_indexer(
                 indexer_database,
                 indexer_rpc,
                 indexer_contract,
+                Some(indexer_config_clone),
             ).await;
         }))
     } else {
@@ -550,6 +627,20 @@ async fn sync_status_handler(
         "contract_address": contract_address,
         "last_updated": indexer_state.updated_at.to_rfc3339()
     }))
+}
+
+async fn indexer_stats_handler(
+    axum::extract::State((database, _rpc)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext)>,
+    Path(contract_address): Path<String>
+) -> Json<serde_json::Value> {
+    use serde_json::json;
+
+    match database.get_indexer_stats(&contract_address).await {
+        Ok(stats) => Json(stats),
+        Err(e) => Json(json!({
+            "error": format!("Failed to get indexer stats: {}", e)
+        }))
+    }
 }
 
 async fn graphiql_handler() -> Html<String> {

@@ -106,9 +106,49 @@ pub struct EventQueryArgs {
     pub from_block: Option<String>,
     pub to_block: Option<String>,
     pub event_types: Option<Vec<String>>,
-    pub from_address: Option<String>,
-    pub to_address: Option<String>,
+    pub event_keys: Option<Vec<String>>,
+    pub from_timestamp: Option<String>,
+    pub to_timestamp: Option<String>,
     pub transaction_hash: Option<String>,
+    pub first: Option<i32>,
+    pub after: Option<String>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct AdvancedEventQueryArgs {
+    pub contract_address: String,
+    pub filters: Option<EventFilters>,
+    pub pagination: Option<PaginationArgs>,
+}
+
+#[derive(InputObject, Default)]
+#[graphql(rename_fields = "camelCase")]
+pub struct EventFilters {
+    pub block_range: Option<BlockRangeFilter>,
+    pub time_range: Option<TimeRangeFilter>,
+    pub event_types: Option<Vec<String>>,
+    pub event_keys: Option<Vec<String>>,
+    pub transaction_hash: Option<String>,
+}
+
+#[derive(InputObject, Default)]
+#[graphql(rename_fields = "camelCase")]
+pub struct BlockRangeFilter {
+    pub from_block: Option<String>,
+    pub to_block: Option<String>,
+}
+
+#[derive(InputObject, Default)]
+#[graphql(rename_fields = "camelCase")]
+pub struct TimeRangeFilter {
+    pub from_timestamp: Option<String>,
+    pub to_timestamp: Option<String>,
+}
+
+#[derive(InputObject, Default)]
+#[graphql(rename_fields = "camelCase")]
+pub struct PaginationArgs {
     pub first: Option<i32>,
     pub after: Option<String>,
 }
