@@ -1,5 +1,7 @@
 use crate::database::{Database, EventRecord};
 use crate::starknet::{get_events, get_contract_abi_string, decode_event_using_abi, get_current_block_number, RpcContext};
+use crate::realtime::RealtimeEventManager;
+use crate::graphql::types::Event;
 use serde_json::Value;
 use chrono::Utc;
 use tokio::time::{sleep, Duration, Instant};
@@ -45,6 +47,7 @@ pub struct BlockchainIndexer {
     rpc: RpcContext,
     contract_address: String,
     config: IndexerConfig,
+    realtime_manager: Option<Arc<RealtimeEventManager>>,
 }
 
 // New struct for handling multiple contracts
@@ -52,14 +55,16 @@ pub struct MultiContractIndexer {
     database: Arc<Database>,
     rpc: RpcContext,
     config: IndexerConfig,
+    realtime_manager: Option<Arc<RealtimeEventManager>>,
 }
 
 impl MultiContractIndexer {
-    pub fn new(database: Arc<Database>, rpc: RpcContext, config: IndexerConfig) -> Self {
+    pub fn new(database: Arc<Database>, rpc: RpcContext, config: IndexerConfig, realtime_manager: Option<Arc<RealtimeEventManager>>) -> Self {
         Self {
             database,
             rpc,
             config,
+            realtime_manager,
         }
     }
 
@@ -76,6 +81,7 @@ impl MultiContractIndexer {
                 let rpc = self.rpc.clone();
                 let config = self.config.clone();
                 let contract = contract_address.clone();
+                let realtime_manager = self.realtime_manager.clone();
                 
                 // Stagger startup by 2 seconds per contract to avoid rate limits
                 let delay_seconds = index as u64 * 2;
@@ -87,7 +93,7 @@ impl MultiContractIndexer {
                         tokio::time::sleep(tokio::time::Duration::from_secs(delay_seconds)).await;
                     }
                     
-                    let indexer = BlockchainIndexer::new(database, rpc, contract, Some(config));
+                    let indexer = BlockchainIndexer::new(database, rpc, contract, Some(config), realtime_manager);
                     indexer.start_syncing().await;
                 });
                 
@@ -107,12 +113,13 @@ impl MultiContractIndexer {
 }
 
 impl BlockchainIndexer {
-    pub fn new(database: Arc<Database>, rpc: RpcContext, contract_address: String, config: Option<IndexerConfig>) -> Self {
+    pub fn new(database: Arc<Database>, rpc: RpcContext, contract_address: String, config: Option<IndexerConfig>, realtime_manager: Option<Arc<RealtimeEventManager>>) -> Self {
         Self {
             database,
             rpc,
             contract_address,
             config: config.unwrap_or_default(),
+            realtime_manager,
         }
     }
 
@@ -185,11 +192,12 @@ impl BlockchainIndexer {
         let config = self.config.clone();
 
         // Start continuous sync task immediately for real-time monitoring
-        let continuous_sync_task = {
+                let continuous_sync_task = {
             let database_clone = database.clone();
             let rpc_clone = rpc.clone();
             let contract_address_clone = contract_address.clone();
             let config_clone = config.clone();
+            let realtime_manager_clone = self.realtime_manager.clone();
             
             tokio::spawn(async move {
                 let indexer = BlockchainIndexer {
@@ -197,6 +205,7 @@ impl BlockchainIndexer {
                     rpc: rpc_clone,
                     contract_address: contract_address_clone,
                     config: config_clone,
+                    realtime_manager: realtime_manager_clone,
                 };
                 indexer.continuous_sync().await;
             })
@@ -208,6 +217,7 @@ impl BlockchainIndexer {
             rpc,
             contract_address,
             config,
+            realtime_manager: self.realtime_manager.clone(),
         };
 
         // Run historical sync
@@ -514,6 +524,27 @@ impl BlockchainIndexer {
         // Insert events into database
         if !events.is_empty() {
             self.database.insert_events(&events).await?;
+            
+            // Broadcast events to real-time subscribers
+            if let Some(realtime_manager) = &self.realtime_manager {
+                for event_record in &events {
+                    // Convert EventRecord to GraphQL Event type for broadcasting
+                    let graphql_event = Event {
+                        id: event_record.id.clone(),
+                        contract_address: event_record.contract_address.clone(),
+                        event_type: event_record.event_type.clone(),
+                        block_number: event_record.block_number.to_string(),
+                        transaction_hash: event_record.transaction_hash.clone(),
+                        log_index: event_record.log_index,
+                        timestamp: event_record.timestamp.to_rfc3339(),
+                        decoded_data: event_record.decoded_data.as_ref().map(|data| crate::graphql::types::EventData { json: data.clone() }),
+                        raw_data: serde_json::from_str(&event_record.raw_data).unwrap_or_default(),
+                        raw_keys: serde_json::from_str(&event_record.raw_keys).unwrap_or_default(),
+                    };
+                    
+                    realtime_manager.broadcast_event(graphql_event).await;
+                }
+            }
         }
 
         Ok(events.len())
@@ -527,8 +558,9 @@ pub async fn start_background_indexer(
     rpc: RpcContext,
     contract_address: String,
     config: Option<IndexerConfig>,
+    realtime_manager: Option<Arc<RealtimeEventManager>>,
 ) {
-    let indexer = BlockchainIndexer::new(database, rpc, contract_address, config);
+    let indexer = BlockchainIndexer::new(database, rpc, contract_address, config, realtime_manager);
     indexer.start_syncing().await;
 }
 
@@ -536,7 +568,8 @@ pub async fn start_multi_contract_background_indexer(
     database: Arc<Database>,
     rpc: RpcContext,
     config: IndexerConfig,
+    realtime_manager: Option<Arc<RealtimeEventManager>>,
 ) {
-    let indexer = MultiContractIndexer::new(database, rpc, config);
+    let indexer = MultiContractIndexer::new(database, rpc, config, realtime_manager);
     indexer.start_syncing_all().await;
 }

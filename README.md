@@ -9,6 +9,7 @@ A Rust-based Starknet event indexer with REST and GraphQL APIs for fetching and 
 - **Multi-Contract Support**: Index multiple contracts simultaneously using allow lists
 - **Database Storage**: SQLite database for persistent event storage with advanced filtering
 - **Real-time APIs**: REST and GraphQL endpoints for querying indexed events
+- **Real-time Event Broadcasting**: WebSocket-based event streaming for instant updates
 - **Address Normalization**: Automatically normalizes Starknet addresses (e.g., `0x02` and `0x2` are treated as the same)
 
 ### Indexing Process
@@ -19,7 +20,7 @@ A Rust-based Starknet event indexer with REST and GraphQL APIs for fetching and 
 5. **Rate Limiting**: Built-in delays to avoid hitting RPC rate limits
 
 ### Subscription Implementation
-**Important**: GraphQL subscriptions use polling, not real-time WebSocket events. The subscription polls the RPC every 3 seconds to check for new events in the latest block. This is not a true real-time subscription but provides near real-time updates.
+**Real-time WebSocket Subscriptions**: GraphQL subscriptions now use true real-time WebSocket events instead of polling. When new events are indexed, they are immediately broadcast to all connected subscribers via WebSocket connections. This provides instant real-time updates as events occur on the blockchain.
 
 ## Quick Start
 
@@ -492,7 +493,7 @@ query GetMultiContractEvents($addresses: [String!]!) {
 }
 ```
 
-#### Subscription (Polling-Based)
+#### Real-time WebSocket Subscription
 ```graphql
 subscription OnEvents($addr: String!) {
   eventStream(contractAddress: $addr, eventTypes: ["Transfer"]) {
@@ -505,7 +506,64 @@ subscription OnEvents($addr: String!) {
 }
 ```
 
-**Note**: This subscription polls the RPC every 3 seconds for new events in the latest block. It's not a true real-time WebSocket subscription (Real websocket subscriptions are under development!).
+**Real-time Features**:
+- ✅ **True WebSocket Events**: Events are broadcast immediately when indexed
+- ✅ **Instant Updates**: No polling delays - events arrive as they happen
+- ✅ **Efficient Filtering**: Subscribe to specific event types and keys
+- ✅ **Multiple Subscribers**: Support for multiple concurrent subscriptions
+- ✅ **Automatic Cleanup**: Subscriptions are managed automatically
+
+**Usage**: Connect to `ws://localhost:3000/ws` and subscribe to events. Events will be pushed in real-time as they are indexed from the blockchain.
+
+## Real-time Features
+
+### WebSocket Subscriptions
+The indexer now supports true real-time WebSocket subscriptions that broadcast events immediately when they are indexed from the blockchain. This eliminates the polling delay and provides instant updates.
+
+#### How It Works
+1. **Event Indexing**: When the background indexer finds new events, they are immediately broadcast to all connected subscribers
+2. **WebSocket Connections**: Clients connect to `ws://localhost:3000/ws` for real-time event streams
+3. **Filtered Subscriptions**: Subscribe to specific contracts, event types, and event keys
+4. **Automatic Management**: Subscriptions are automatically created and cleaned up
+
+#### Subscription Features
+- **Real-time Broadcasting**: Events are pushed instantly when indexed
+- **Multiple Subscribers**: Support for concurrent subscriptions
+- **Event Filtering**: Filter by contract address, event types, and event keys
+- **Connection Management**: Automatic handling of WebSocket connections
+- **Error Handling**: Graceful handling of connection errors and timeouts
+
+#### Example Usage
+```javascript
+// Connect to WebSocket endpoint
+const ws = new WebSocket('ws://localhost:3000/ws');
+
+// Subscribe to Transfer events from a specific contract
+const subscription = {
+  query: `
+    subscription OnTransferEvents($addr: String!) {
+      eventStream(contractAddress: $addr, eventTypes: ["Transfer"]) {
+        id
+        eventType
+        blockNumber
+        transactionHash
+        decodedData { json }
+      }
+    }
+  `,
+  variables: {
+    addr: "0x02cf12918a78bb09bb553590cc05d1ee8edd6bbb829c84464c0374fa620c983e"
+  }
+};
+
+ws.send(JSON.stringify(subscription));
+
+// Handle incoming events
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('New Transfer event:', data);
+};
+```
 
 ## Technical Details
 
@@ -541,17 +599,18 @@ CREATE TABLE indexer_state (
 - **Retry Logic**: Configurable retry attempts for RPC failures
 - **Rate Limiting**: Built-in delays to avoid RPC rate limits
 - **Database Indexes**: Optimized queries with proper indexing
+- **Real-time Broadcasting**: Efficient event broadcasting to WebSocket subscribers
 
 ### Rate Limiting & Reliability
 - **RPC Retries**: Configurable retry attempts (default: 3)
 - **Delay Between Chunks**: 500ms delay between block chunks
 - **Continuous Sync**: 2-second polling interval (configurable)
-- **Subscription Polling**: 3-second interval for GraphQL subscriptions
+- **Real-time Events**: Instant WebSocket broadcasting when events are indexed
 
 ### Limitations
-- **Polling-Based Subscriptions**: Not true real-time WebSocket events
 - **SQLite Storage**: Not suitable for high-volume production use
 - **Memory Usage**: All events loaded into memory for complex filtering
+- **WebSocket Connections**: Limited by available system resources
 
 ## Development
 
@@ -562,12 +621,13 @@ src/
 ├── indexer.rs           # Background indexing logic
 ├── database.rs          # Database operations and filtering
 ├── starknet.rs          # RPC client and event decoding
+├── realtime.rs          # Real-time event streaming and WebSocket management
 └── graphql/
     ├── schema.rs        # GraphQL schema setup
     ├── types.rs         # GraphQL types and inputs
     └── resolvers/
         ├── events.rs    # Event queries and filtering
-        └── subscriptions.rs  # Polling-based subscriptions
+        └── subscriptions.rs  # Real-time WebSocket subscriptions
 ```
 
 ### Dependencies
@@ -577,6 +637,8 @@ src/
 - `tokio` - Async runtime
 - `serde` - Serialization
 - `reqwest` - HTTP client for RPC calls
+- `tokio-tungstenite` - WebSocket support
+- `uuid` - Unique identifier generation
 
 ### Building and Testing
 ```bash
@@ -588,6 +650,11 @@ cargo test
 
 # Run with specific configuration
 cargo run -- --contract-address 0x... --start-block 1866762
+
+# Test real-time WebSocket subscriptions
+cd examples
+npm install
+npm test
 ```
 
 ## Production Considerations
@@ -600,9 +667,10 @@ cargo run -- --contract-address 0x... --start-block 1866762
 
 ### Recommended Improvements
 - **PostgreSQL**: Use proper database for production
-- **True WebSocket**: Implement real-time event streaming
 - **Horizontal Scaling**: Support multiple indexer instances
 - **Event Batching**: Batch database operations for better performance
+- **Connection Management**: Implement WebSocket connection pooling
+- **Event Persistence**: Store subscription events for offline clients
 
 ### Monitoring
 - **Sync Status**: Monitor `/sync-status` endpoint
