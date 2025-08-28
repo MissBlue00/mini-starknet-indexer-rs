@@ -31,6 +31,18 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn normalize_address(address: &str) -> String {
+        if !address.starts_with("0x") {
+            return address.to_string();
+        }
+        
+        let hex = &address[2..];
+        let trimmed = hex.trim_start_matches('0');
+        let hex_part = if trimmed.is_empty() { "0" } else { trimmed };
+        let padded = format!("{:0>64}", hex_part);
+        format!("0x{}", padded)
+    }
+
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
         // Parse the database URL and create connection options that will create the file if it doesn't exist
         let options = SqliteConnectOptions::from_str(database_url)?
@@ -122,6 +134,7 @@ impl Database {
         limit: i32,
         offset: i32,
     ) -> Result<Vec<EventRecord>, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
         // Use a simpler approach with separate queries for different cases
         let rows = match (event_types, from_block, to_block) {
             // No filters except contract address
@@ -131,7 +144,7 @@ impl Database {
                      FROM events WHERE contract_address = ? 
                      ORDER BY block_number DESC, log_index DESC LIMIT ? OFFSET ?"
                 )
-                .bind(contract_address)
+                .bind(&normalized_address)
                 .bind(limit as i64)
                 .bind(offset as i64)
                 .fetch_all(&self.pool)
@@ -144,7 +157,7 @@ impl Database {
                      FROM events WHERE contract_address = ? AND block_number >= ? AND block_number <= ? 
                      ORDER BY block_number DESC, log_index DESC LIMIT ? OFFSET ?"
                 )
-                .bind(contract_address)
+                .bind(&normalized_address)
                 .bind(from as i64)
                 .bind(to as i64)
                 .bind(limit as i64)
@@ -159,7 +172,7 @@ impl Database {
                      FROM events WHERE contract_address = ? AND block_number >= ? 
                      ORDER BY block_number DESC, log_index DESC LIMIT ? OFFSET ?"
                 )
-                .bind(contract_address)
+                .bind(&normalized_address)
                 .bind(from as i64)
                 .bind(limit as i64)
                 .bind(offset as i64)
@@ -173,7 +186,7 @@ impl Database {
                      FROM events WHERE contract_address = ? AND block_number <= ? 
                      ORDER BY block_number DESC, log_index DESC LIMIT ? OFFSET ?"
                 )
-                .bind(contract_address)
+                .bind(&normalized_address)
                 .bind(to as i64)
                 .bind(limit as i64)
                 .bind(offset as i64)
@@ -187,7 +200,7 @@ impl Database {
                      FROM events WHERE contract_address = ? 
                      ORDER BY block_number DESC, log_index DESC"
                 )
-                .bind(contract_address)
+                .bind(&normalized_address)
                 .fetch_all(&self.pool)
                 .await?
             }
@@ -224,10 +237,11 @@ impl Database {
     }
 
     pub async fn get_indexer_state(&self, contract_address: &str) -> Result<Option<IndexerState>, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
         let row = sqlx::query(
             "SELECT id, contract_address, last_synced_block, updated_at FROM indexer_state WHERE contract_address = ?"
         )
-        .bind(contract_address)
+        .bind(&normalized_address)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -246,6 +260,7 @@ impl Database {
     }
 
     pub async fn update_indexer_state(&self, contract_address: &str, last_synced_block: u64) -> Result<(), sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
         let now = Utc::now();
         sqlx::query(
             r#"
@@ -253,7 +268,7 @@ impl Database {
             VALUES (?, ?, ?)
             "#
         )
-        .bind(contract_address)
+        .bind(&normalized_address)
         .bind(last_synced_block as i64)
         .bind(now.to_rfc3339())
         .execute(&self.pool)
@@ -263,17 +278,18 @@ impl Database {
     }
 
     pub async fn count_events(&self, contract_address: &str, event_types: Option<&[String]>) -> Result<i64, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
         match event_types {
             None => {
                 let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE contract_address = ?")
-                    .bind(contract_address)
+                    .bind(&normalized_address)
                     .fetch_one(&self.pool)
                     .await?;
                 Ok(count)
             }
             Some(types) if types.is_empty() => {
                 let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE contract_address = ?")
-                    .bind(contract_address)
+                    .bind(&normalized_address)
                     .fetch_one(&self.pool)
                     .await?;
                 Ok(count)
@@ -281,9 +297,128 @@ impl Database {
             Some(types) => {
                 // For now, use a simple approach - get all events and count in memory
                 // In production, you'd want to optimize this with proper SQL IN clauses
-                let events = self.get_events(contract_address, Some(types), None, None, i32::MAX, 0).await?;
+                let events = self.get_events(&normalized_address, Some(types), None, None, i32::MAX, 0).await?;
                 Ok(events.len() as i64)
             }
         }
+    }
+
+    pub async fn get_events_with_advanced_filters(
+        &self,
+        contract_address: &str,
+        event_types: Option<&[String]>,
+        event_keys: Option<&[String]>,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        from_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        to_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        transaction_hash: Option<&str>,
+        limit: i32,
+        offset: i32,
+    ) -> Result<Vec<EventRecord>, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
+        // For now, use the existing get_events method and filter in memory
+        // This can be optimized later with proper dynamic SQL queries
+        let mut events = self.get_events(&normalized_address, event_types, from_block, to_block, limit * 2, offset).await?;
+        
+        // Apply additional filters in memory
+        events.retain(|event| {
+            // Filter by event keys if specified
+            if let Some(filter_keys) = event_keys {
+                let keys: Vec<String> = serde_json::from_str(&event.raw_keys).unwrap_or_default();
+                let has_matching_key = filter_keys.iter().any(|filter_key| {
+                    keys.iter().any(|key| key.contains(filter_key))
+                });
+                if !has_matching_key {
+                    return false;
+                }
+            }
+
+            // Filter by timestamp if specified
+            if let Some(from_ts) = from_timestamp {
+                if event.timestamp < from_ts {
+                    return false;
+                }
+            }
+            if let Some(to_ts) = to_timestamp {
+                if event.timestamp > to_ts {
+                    return false;
+                }
+            }
+
+            // Filter by transaction hash if specified
+            if let Some(tx_hash) = transaction_hash {
+                if event.transaction_hash != tx_hash {
+                    return false;
+                }
+            }
+
+            true
+        });
+
+        // Apply limit after filtering
+        events.truncate(limit as usize);
+        
+        Ok(events)
+    }
+
+    pub async fn get_indexer_stats(&self, contract_address: &str) -> Result<serde_json::Value, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
+        // Get total events count
+        let total_events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE contract_address = ?")
+            .bind(&normalized_address)
+            .fetch_one(&self.pool)
+            .await?;
+
+        // Get events by type
+        let event_types = sqlx::query(
+            "SELECT event_type, COUNT(*) as count FROM events WHERE contract_address = ? GROUP BY event_type ORDER BY count DESC"
+        )
+        .bind(&normalized_address)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut type_stats = serde_json::Map::new();
+        for row in event_types {
+            let event_type: String = row.get("event_type");
+            let count: i64 = row.get("count");
+            type_stats.insert(event_type, serde_json::Value::Number(count.into()));
+        }
+
+        // Get block range
+        let block_range = sqlx::query(
+            "SELECT MIN(block_number) as min_block, MAX(block_number) as max_block FROM events WHERE contract_address = ?"
+        )
+        .bind(&normalized_address)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let min_block: Option<i64> = block_range.get("min_block");
+        let max_block: Option<i64> = block_range.get("max_block");
+
+        // Get time range
+        let time_range = sqlx::query(
+            "SELECT MIN(timestamp) as min_time, MAX(timestamp) as max_time FROM events WHERE contract_address = ?"
+        )
+        .bind(&normalized_address)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let min_time: Option<String> = time_range.get("min_time");
+        let max_time: Option<String> = time_range.get("max_time");
+
+        Ok(serde_json::json!({
+            "contract_address": normalized_address,
+            "total_events": total_events,
+            "event_types": type_stats,
+            "block_range": {
+                "min": min_block,
+                "max": max_block
+            },
+            "time_range": {
+                "min": min_time,
+                "max": max_time
+            }
+        }))
     }
 }
