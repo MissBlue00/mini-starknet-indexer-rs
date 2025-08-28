@@ -259,7 +259,7 @@ subscription OnEvents($addr: String!) {
 }
 ```
 
-**Note**: This subscription polls the RPC every 3 seconds for new events in the latest block. It's not a true real-time WebSocket subscription.
+**Note**: This subscription polls the RPC every 3 seconds for new events in the latest block. It's not a true real-time WebSocket subscription (Real websocket subscriptions are under development!).
 
 ## Technical Details
 
