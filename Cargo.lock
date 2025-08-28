@@ -1490,6 +1490,7 @@ dependencies = [
  "clap",
  "dotenv",
  "futures",
+ "hex",
  "reqwest",
  "serde",
  "serde_json",

@@ -4,6 +4,39 @@ use std::sync::Arc;
 use crate::database::Database;
 use crate::graphql::types::{Event, EventConnection, EventEdge, PageInfo, AdvancedEventQueryArgs, ContractEvents, MultiContractEventsConnection};
 
+fn convert_felt_to_string(felt_hex: &str) -> serde_json::Value {
+    // Remove 0x prefix if present
+    let hex_str = felt_hex.trim_start_matches("0x");
+    
+    // Try to decode as UTF-8 string
+    if let Ok(bytes) = hex::decode(hex_str) {
+        // Remove trailing zeros
+        let trimmed_bytes: Vec<u8> = bytes.into_iter()
+            .rev()
+            .skip_while(|&b| b == 0)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        
+        // Try to convert to UTF-8 string
+        if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
+            // Check if it's a readable string (printable ASCII or valid UTF-8)
+            if utf8_string.chars().all(|c| c.is_ascii_graphic() || c.is_whitespace()) && !utf8_string.is_empty() {
+                return serde_json::Value::String(utf8_string);
+            }
+        }
+    }
+    
+    // If not a valid string, try to parse as number and return as string
+    if let Ok(num) = u64::from_str_radix(hex_str, 16) {
+        serde_json::Value::Number(num.into())
+    } else {
+        // Fallback to original hex value
+        serde_json::Value::String(felt_hex.to_string())
+    }
+}
+
 #[derive(Default)]
 pub struct EventQueryRoot;
 
@@ -18,19 +51,14 @@ fn convert_decoded_data_to_clean_format(decoded_json: &str) -> serde_json::Value
                     // For events like U8Event, the structure is typically:
                     // [event_selector, variant_selector, actual_value]
                     if keys_array.len() >= 3 {
-                        // Extract the actual value (last element in most cases)
-                        if let Some(value_key) = keys_array.last() {
-                            if let Some(value_str) = value_key.as_str() {
-                                // Try to decode the hex value to its simplest form
-                                let clean_value = if let Ok(num) = u64::from_str_radix(value_str.trim_start_matches("0x"), 16) {
-                                    serde_json::Value::Number(num.into())
-                                } else {
-                                    serde_json::Value::String(value_str.to_string())
-                                };
-                                
-                                clean_data.insert("value".to_string(), clean_value);
-                            }
-                        }
+                                                       // Extract the actual value (last element in most cases)
+                               if let Some(value_key) = keys_array.last() {
+                                   if let Some(value_str) = value_key.as_str() {
+                                       // Convert felt252 hex values to readable strings
+                                       let clean_value = convert_felt_to_string(value_str);
+                                       clean_data.insert("value".to_string(), clean_value);
+                                   }
+                               }
                     }
                 }
             } else {
@@ -53,6 +81,10 @@ fn convert_decoded_data_to_clean_format(decoded_json: &str) -> serde_json::Value
                             } else {
                                 value.clone()
                             }
+                        },
+                        serde_json::Value::String(hex_str) => {
+                            // Convert felt252 hex values to readable strings
+                            convert_felt_to_string(hex_str)
                         },
                         _ => value.clone()
                     };

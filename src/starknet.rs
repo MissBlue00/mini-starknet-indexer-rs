@@ -269,12 +269,8 @@ impl AbiParser {
         if let Some(s) = value.as_str() {
             match type_name {
                 "felt252" | "core::felt252" | "felt" => {
-                    // Try to decode as number first, fallback to string
-                    if let Ok(num) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
-                        Some(serde_json::Value::Number(num.into()))
-                    } else {
-                        Some(serde_json::Value::String(s.to_string()))
-                    }
+                    // Convert felt252 to readable string
+                    Some(serde_json::Value::String(self.felt_to_string(s)))
                 },
                 t if t.starts_with("core::integer::u") || ["u8", "u16", "u32", "u64", "u128"].contains(&t) => {
                     // Handle unsigned integers
@@ -287,11 +283,15 @@ impl AbiParser {
                     }
                 },
                 "core::integer::u256" | "u256" => {
-                    // For u256, we might have multiple values (low, high)
-                    // For now, return as string since it might be too large for JSON number
-                    Some(serde_json::Value::String(s.to_string()))
+                    // For u256, try to parse as number if possible (use u64 limit for JSON compatibility)
+                    if let Ok(num) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
+                        Some(serde_json::Value::Number(num.into()))
+                    } else {
+                        // For very large numbers, return as string
+                        Some(serde_json::Value::String(s.to_string()))
+                    }
                 },
-                "core::starknet::contract_address::ContractAddress" | "ContractAddress" => {
+                "core::starknet::contract_address::ContractAddress" | "ContractAddress" | "contract_address" => {
                     Some(serde_json::Value::String(s.to_string()))
                 },
                 "core::bool" | "bool" => {
@@ -302,10 +302,61 @@ impl AbiParser {
                         Some(serde_json::Value::Bool(true))
                     }
                 },
+                // Handle signed integers
+                t if t.starts_with("core::integer::i") || ["i8", "i16", "i32", "i64", "i128"].contains(&t) => {
+                    if let Ok(num) = i64::from_str_radix(s.trim_start_matches("0x"), 16) {
+                        Some(serde_json::Value::Number(num.into()))
+                    } else if let Ok(num) = s.parse::<i64>() {
+                        Some(serde_json::Value::Number(num.into()))
+                    } else {
+                        Some(serde_json::Value::String(s.to_string()))
+                    }
+                },
+                // Handle ByteArray (Cairo strings)
+                "core::byte_array::ByteArray" | "ByteArray" => {
+                    Some(serde_json::Value::String(self.felt_to_string(s)))
+                },
+                // Handle ClassHash
+                "core::starknet::class_hash::ClassHash" | "ClassHash" => {
+                    Some(serde_json::Value::String(s.to_string()))
+                },
                 _ => None
             }
         } else {
             None
+        }
+    }
+    
+    fn felt_to_string(&self, felt_hex: &str) -> String {
+        // Remove 0x prefix if present
+        let hex_str = felt_hex.trim_start_matches("0x");
+        
+        // Try to decode as UTF-8 string
+        if let Ok(bytes) = hex::decode(hex_str) {
+            // Remove trailing zeros
+            let trimmed_bytes: Vec<u8> = bytes.into_iter()
+                .rev()
+                .skip_while(|&b| b == 0)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            
+            // Try to convert to UTF-8 string
+            if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
+                // Check if it's a readable string (printable ASCII or valid UTF-8)
+                if utf8_string.chars().all(|c| c.is_ascii_graphic() || c.is_whitespace()) && !utf8_string.is_empty() {
+                    return utf8_string;
+                }
+            }
+        }
+        
+        // If not a valid string, try to parse as number and return as string
+        if let Ok(num) = u64::from_str_radix(hex_str, 16) {
+            num.to_string()
+        } else {
+            // Fallback to original hex value
+            felt_hex.to_string()
         }
     }
     
