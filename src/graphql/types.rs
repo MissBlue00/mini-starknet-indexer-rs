@@ -33,22 +33,8 @@ pub struct EventFieldValue {
     pub decoded_value: Option<String>,
 }
 
-// Represent decoded data as structured fields with proper GraphQL types
-#[derive(SimpleObject, Clone)]
-#[graphql(rename_fields = "camelCase")]
-pub struct EventData {
-    pub json: String, // Keep for backward compatibility
-    pub fields: Option<Vec<EventField>>, // New structured format
-}
-
-#[derive(SimpleObject, Clone)]
-#[graphql(rename_fields = "camelCase")]
-pub struct EventField {
-    pub name: String,
-    pub value: String, // Raw value
-    pub decoded_value: Option<serde_json::Value>, // Decoded/typed value
-    pub field_type: String,
-}
+// Clean, lean event data structure like TheGraph protocol
+// This will be flattened as a JSON object directly
 
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
@@ -60,7 +46,7 @@ pub struct Event {
     pub transaction_hash: String,
     pub log_index: i32,
     pub timestamp: String,
-    pub decoded_data: Option<EventData>,
+    pub data: Option<serde_json::Value>,
     pub raw_data: Vec<String>,
     pub raw_keys: Vec<String>,
 }

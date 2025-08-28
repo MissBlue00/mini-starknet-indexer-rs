@@ -2,15 +2,15 @@ use async_graphql::{Context, Object, Result as GqlResult};
 use std::sync::Arc;
 
 use crate::database::Database;
-use crate::graphql::types::{Event, EventConnection, EventData, EventEdge, PageInfo, AdvancedEventQueryArgs, ContractEvents, MultiContractEventsConnection, EventField};
+use crate::graphql::types::{Event, EventConnection, EventEdge, PageInfo, AdvancedEventQueryArgs, ContractEvents, MultiContractEventsConnection};
 
 #[derive(Default)]
 pub struct EventQueryRoot;
 
-fn convert_decoded_data_to_fields(decoded_json: &str) -> Option<Vec<EventField>> {
+fn convert_decoded_data_to_clean_format(decoded_json: &str) -> serde_json::Value {
     if let Ok(decoded) = serde_json::from_str::<serde_json::Value>(decoded_json) {
         if let Some(obj) = decoded.as_object() {
-            let mut fields = Vec::new();
+            let mut clean_data = serde_json::Map::new();
             
             // Check if this is the old format with only _keys (backward compatibility)
             if obj.len() == 1 && obj.contains_key("_keys") {
@@ -21,87 +21,52 @@ fn convert_decoded_data_to_fields(decoded_json: &str) -> Option<Vec<EventField>>
                         // Extract the actual value (last element in most cases)
                         if let Some(value_key) = keys_array.last() {
                             if let Some(value_str) = value_key.as_str() {
-                                // Try to decode the hex value
-                                let decoded_value = if let Ok(num) = u64::from_str_radix(value_str.trim_start_matches("0x"), 16) {
-                                    serde_json::json!({
-                                        "value": num,
-                                        "hex": value_str,
-                                        "type": "auto_detected"
-                                    })
+                                // Try to decode the hex value to its simplest form
+                                let clean_value = if let Ok(num) = u64::from_str_radix(value_str.trim_start_matches("0x"), 16) {
+                                    serde_json::Value::Number(num.into())
                                 } else {
-                                    serde_json::json!({
-                                        "raw": value_str,
-                                        "type": "felt252"
-                                    })
+                                    serde_json::Value::String(value_str.to_string())
                                 };
                                 
-                                fields.push(EventField {
-                                    name: "value".to_string(),
-                                    value: value_str.to_string(),
-                                    decoded_value: Some(decoded_value),
-                                    field_type: "auto_detected".to_string(),
-                                });
+                                clean_data.insert("value".to_string(), clean_value);
                             }
                         }
                     }
                 }
             } else {
-                // New format - process normally
+                // New format - process normally, extracting clean values
                 for (key, value) in obj {
                     // Skip internal fields that start with underscore
                     if key.starts_with('_') {
                         continue;
                     }
                     
-                    let (field_type, decoded_value, raw_value) = match value {
+                    let clean_value = match value {
                         serde_json::Value::Object(nested) => {
-                            // Handle structured decoded values from our improved decoder
-                            if let Some(type_str) = nested.get("type").and_then(|t| t.as_str()) {
-                                let decoded_val = if nested.contains_key("value") {
-                                    nested.get("value").cloned()
-                                } else if nested.contains_key("decimal") {
-                                    nested.get("decimal").cloned()
-                                } else if nested.contains_key("address") {
-                                    nested.get("address").cloned()
-                                } else {
-                                    Some(value.clone())
-                                };
-                                
-                                let raw_val = if let Some(hex) = nested.get("hex") {
-                                    hex.as_str().unwrap_or("").to_string()
-                                } else if let Some(raw) = nested.get("raw") {
-                                    raw.as_str().unwrap_or("").to_string()
-                                } else {
-                                    value.to_string()
-                                };
-                                
-                                (type_str.to_string(), decoded_val, raw_val)
+                            // Extract the most relevant value from structured decoded values
+                            if let Some(decoded_val) = nested.get("value") {
+                                decoded_val.clone()
+                            } else if let Some(decimal_val) = nested.get("decimal") {
+                                decimal_val.clone()
+                            } else if let Some(address_val) = nested.get("address") {
+                                address_val.clone()
                             } else {
-                                // Fallback for unstructured objects
-                                ("object".to_string(), Some(value.clone()), value.to_string())
+                                value.clone()
                             }
                         },
-                        _ => {
-                            // Simple value
-                            ("unknown".to_string(), Some(value.clone()), value.to_string())
-                        }
+                        _ => value.clone()
                     };
                     
-                    fields.push(EventField {
-                        name: key.clone(),
-                        value: raw_value,
-                        decoded_value,
-                        field_type,
-                    });
+                    clean_data.insert(key.clone(), clean_value);
                 }
             }
             
-            Some(fields)
+            serde_json::Value::Object(clean_data)
         } else {
-            None
+            serde_json::Value::Object(serde_json::Map::new())
         }
     } else {
-        None
+        serde_json::Value::Object(serde_json::Map::new())
     }
 }
 
@@ -180,10 +145,7 @@ impl EventQueryRoot {
                 transaction_hash: db_event.transaction_hash.clone(),
                 log_index: db_event.log_index,
                 timestamp: db_event.timestamp.to_rfc3339(),
-                decoded_data: db_event.decoded_data.as_ref().map(|json| EventData { 
-                    json: json.clone(),
-                    fields: convert_decoded_data_to_fields(json),
-                }),
+                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
                 raw_data,
                 raw_keys,
             };
@@ -289,10 +251,7 @@ impl EventQueryRoot {
                 transaction_hash: db_event.transaction_hash.clone(),
                 log_index: db_event.log_index,
                 timestamp: db_event.timestamp.to_rfc3339(),
-                decoded_data: db_event.decoded_data.as_ref().map(|json| EventData { 
-                    json: json.clone(),
-                    fields: convert_decoded_data_to_fields(json),
-                }),
+                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
                 raw_data,
                 raw_keys,
             };
@@ -410,10 +369,7 @@ impl EventQueryRoot {
                 transaction_hash: db_event.transaction_hash.clone(),
                 log_index: db_event.log_index,
                 timestamp: db_event.timestamp.to_rfc3339(),
-                decoded_data: db_event.decoded_data.as_ref().map(|json| EventData { 
-                    json: json.clone(),
-                    fields: convert_decoded_data_to_fields(json),
-                }),
+                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
                 raw_data,
                 raw_keys,
             };
@@ -519,10 +475,7 @@ impl EventQueryRoot {
                     transaction_hash: db_event.transaction_hash.clone(),
                     log_index: db_event.log_index,
                     timestamp: db_event.timestamp.to_rfc3339(),
-                    decoded_data: db_event.decoded_data.as_ref().map(|json| EventData { 
-                        json: json.clone(),
-                        fields: convert_decoded_data_to_fields(json),
-                    }),
+                    data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
                     raw_data,
                     raw_keys,
                 };
