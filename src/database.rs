@@ -236,6 +236,132 @@ impl Database {
         Ok(events)
     }
 
+    pub async fn get_events_with_ordering(
+        &self,
+        contract_address: &str,
+        event_types: Option<&[String]>,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        limit: i32,
+        offset: i32,
+        order_by: Option<crate::graphql::types::EventOrderBy>,
+    ) -> Result<Vec<EventRecord>, sqlx::Error> {
+        let normalized_address = Self::normalize_address(contract_address);
+        
+        // Determine the ORDER BY clause based on the order_by parameter
+        let order_clause = match order_by {
+            Some(crate::graphql::types::EventOrderBy::BlockNumberDesc) | None => "ORDER BY block_number DESC, log_index DESC",
+            Some(crate::graphql::types::EventOrderBy::BlockNumberAsc) => "ORDER BY block_number ASC, log_index ASC",
+            Some(crate::graphql::types::EventOrderBy::TimestampDesc) => "ORDER BY timestamp DESC, log_index DESC",
+            Some(crate::graphql::types::EventOrderBy::TimestampAsc) => "ORDER BY timestamp ASC, log_index ASC",
+        };
+        
+        // Use a simpler approach with separate queries for different cases
+        let rows = match (event_types, from_block, to_block) {
+            // No filters except contract address
+            (None, None, None) => {
+                let query = format!(
+                    "SELECT id, contract_address, event_type, block_number, transaction_hash, log_index, timestamp, decoded_data, raw_data, raw_keys 
+                     FROM events WHERE contract_address = ? 
+                     {} LIMIT ? OFFSET ?", order_clause
+                );
+                sqlx::query(&query)
+                    .bind(&normalized_address)
+                    .bind(limit as i64)
+                    .bind(offset as i64)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            // Only block range filter
+            (None, Some(from), Some(to)) => {
+                let query = format!(
+                    "SELECT id, contract_address, event_type, block_number, transaction_hash, log_index, timestamp, decoded_data, raw_data, raw_keys 
+                     FROM events WHERE contract_address = ? AND block_number >= ? AND block_number <= ? 
+                     {} LIMIT ? OFFSET ?", order_clause
+                );
+                sqlx::query(&query)
+                    .bind(&normalized_address)
+                    .bind(from as i64)
+                    .bind(to as i64)
+                    .bind(limit as i64)
+                    .bind(offset as i64)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            // Only from block
+            (None, Some(from), None) => {
+                let query = format!(
+                    "SELECT id, contract_address, event_type, block_number, transaction_hash, log_index, timestamp, decoded_data, raw_data, raw_keys 
+                     FROM events WHERE contract_address = ? AND block_number >= ? 
+                     {} LIMIT ? OFFSET ?", order_clause
+                );
+                sqlx::query(&query)
+                    .bind(&normalized_address)
+                    .bind(from as i64)
+                    .bind(limit as i64)
+                    .bind(offset as i64)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            // Only to block
+            (None, None, Some(to)) => {
+                let query = format!(
+                    "SELECT id, contract_address, event_type, block_number, transaction_hash, log_index, timestamp, decoded_data, raw_data, raw_keys 
+                     FROM events WHERE contract_address = ? AND block_number <= ? 
+                     {} LIMIT ? OFFSET ?", order_clause
+                );
+                sqlx::query(&query)
+                    .bind(&normalized_address)
+                    .bind(to as i64)
+                    .bind(limit as i64)
+                    .bind(offset as i64)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            // For now, handle event type filtering in memory - we can optimize this later
+            _ => {
+                let query = format!(
+                    "SELECT id, contract_address, event_type, block_number, transaction_hash, log_index, timestamp, decoded_data, raw_data, raw_keys 
+                     FROM events WHERE contract_address = ? 
+                     {}", order_clause
+                );
+                sqlx::query(&query)
+                    .bind(&normalized_address)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        
+        let mut events = Vec::new();
+        for row in rows.into_iter().take(limit as usize).skip(offset as usize) {
+            let event_type: String = row.get("event_type");
+            
+            // Filter by event types if specified
+            if let Some(filter_types) = event_types {
+                if !filter_types.contains(&event_type) {
+                    continue;
+                }
+            }
+            
+            events.push(EventRecord {
+                id: row.get("id"),
+                contract_address: row.get("contract_address"),
+                event_type,
+                block_number: row.get::<i64, _>("block_number") as u64,
+                transaction_hash: row.get("transaction_hash"),
+                log_index: row.get("log_index"),
+                timestamp: DateTime::parse_from_rfc3339(&row.get::<String, _>("timestamp"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                decoded_data: row.get("decoded_data"),
+                raw_data: row.get("raw_data"),
+                raw_keys: row.get("raw_keys"),
+            });
+        }
+        
+        Ok(events)
+    }
+
     pub async fn get_indexer_state(&self, contract_address: &str) -> Result<Option<IndexerState>, sqlx::Error> {
         let normalized_address = Self::normalize_address(contract_address);
         let row = sqlx::query(
@@ -315,11 +441,12 @@ impl Database {
         transaction_hash: Option<&str>,
         limit: i32,
         offset: i32,
+        order_by: Option<crate::graphql::types::EventOrderBy>,
     ) -> Result<Vec<EventRecord>, sqlx::Error> {
         let normalized_address = Self::normalize_address(contract_address);
         // For now, use the existing get_events method and filter in memory
         // This can be optimized later with proper dynamic SQL queries
-        let mut events = self.get_events(&normalized_address, event_types, from_block, to_block, limit * 2, offset).await?;
+        let mut events = self.get_events_with_ordering(&normalized_address, event_types, from_block, to_block, limit * 2, offset, order_by).await?;
         
         // Apply additional filters in memory
         events.retain(|event| {
@@ -422,6 +549,7 @@ impl Database {
         }))
     }
 
+    #[allow(dead_code)]
     pub async fn get_events_from_multiple_contracts(
         &self,
         contract_addresses: &[String],
@@ -449,6 +577,7 @@ impl Database {
                 transaction_hash,
                 limit,
                 offset,
+                None, // Default ordering
             ).await?;
             
             all_events.extend(events);

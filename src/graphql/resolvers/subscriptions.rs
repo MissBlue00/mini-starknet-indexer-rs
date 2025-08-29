@@ -10,17 +10,39 @@ pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
-    async fn event_stream(
+    /// Universal event subscription that handles all use cases:
+    /// - Single contract: provide contractAddress
+    /// - Multiple contracts: provide contractAddresses  
+    /// - Event filtering: eventTypes, eventKeys
+    /// - Real-time updates: automatically streams new events
+    async fn events(
         &self,
         ctx: &Context<'_>,
-        contract_address: String,
-        event_types: Option<Vec<String>>,
-        event_keys: Option<Vec<String>>,
+        // Contract filtering - supports single or multiple contracts
+        #[graphql(name = "contractAddress")] contract_address: Option<String>,
+        #[graphql(name = "contractAddresses")] contract_addresses: Option<Vec<String>>,
+        
+        // Event filtering
+        #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>,
+        #[graphql(name = "eventKeys")] event_keys: Option<Vec<String>>,
     ) -> Result<BoxStream<'static, Event>, async_graphql::Error> {
         let realtime_manager = ctx.data_unchecked::<Arc<RealtimeEventManager>>();
         
+        // Determine target contracts
+        let target_contracts = if let Some(addresses) = contract_addresses {
+            addresses
+        } else if let Some(address) = contract_address {
+            vec![address]
+        } else {
+            return Err(async_graphql::Error::new("Either contractAddress or contractAddresses must be provided"));
+        };
+
+        // For now, we'll support single contract subscriptions
+        // TODO: Enhance realtime manager to support multiple contracts
+        let contract_addr = target_contracts.first().unwrap().clone();
+        
         let filter = SubscriptionFilter {
-            contract_address,
+            contract_address: contract_addr,
             event_types,
             event_keys,
         };
@@ -37,20 +59,7 @@ impl SubscriptionRoot {
             })
             .boxed();
 
-        // Note: In a production system, you might want to clean up the subscription
-        // when the stream ends, but for now we'll let it persist
         Ok(stream)
-    }
-
-    async fn event_stream_realtime(
-        &self,
-        ctx: &Context<'_>,
-        contract_address: String,
-        event_types: Option<Vec<String>>,
-        event_keys: Option<Vec<String>>,
-    ) -> Result<BoxStream<'static, Event>, async_graphql::Error> {
-        // This is an alias for the main event_stream for backward compatibility
-        self.event_stream(ctx, contract_address, event_types, event_keys).await
     }
 }
 

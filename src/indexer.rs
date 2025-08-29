@@ -537,7 +537,7 @@ impl BlockchainIndexer {
                         transaction_hash: event_record.transaction_hash.clone(),
                         log_index: event_record.log_index,
                         timestamp: event_record.timestamp.to_rfc3339(),
-                        decoded_data: event_record.decoded_data.as_ref().map(|data| crate::graphql::types::EventData { json: data.clone() }),
+                        data: Some(serde_json::Value::Object(serde_json::Map::new())), // Will be computed when requested through GraphQL
                         raw_data: serde_json::from_str(&event_record.raw_data).unwrap_or_default(),
                         raw_keys: serde_json::from_str(&event_record.raw_keys).unwrap_or_default(),
                     };
