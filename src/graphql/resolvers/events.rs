@@ -8,29 +8,54 @@ fn convert_felt_to_string(felt_hex: &str) -> serde_json::Value {
     // Remove 0x prefix if present
     let hex_str = felt_hex.trim_start_matches("0x");
     
-    // Try to decode as UTF-8 string
-    if let Ok(bytes) = hex::decode(hex_str) {
-        // Remove trailing zeros
-        let trimmed_bytes: Vec<u8> = bytes.into_iter()
-            .rev()
-            .skip_while(|&b| b == 0)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        
-        // Try to convert to UTF-8 string
-        if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
-            // Check if it's a readable string (printable ASCII or valid UTF-8)
-            if utf8_string.chars().all(|c| c.is_ascii_graphic() || c.is_whitespace()) && !utf8_string.is_empty() {
-                return serde_json::Value::String(utf8_string);
+    // Handle special cases first - all F's means max value
+    if hex_str == "ffffffffffffffffffffffffffffffff" || hex_str.chars().all(|c| c == 'f' || c == 'F') {
+        // This is likely a max value, convert to decimal
+        if let Ok(num) = u128::from_str_radix(hex_str, 16) {
+            if num <= u64::MAX as u128 {
+                return serde_json::Value::Number((num as u64).into());
+            } else {
+                return serde_json::Value::String(num.to_string());
             }
         }
     }
     
-    // If not a valid string, try to parse as number and return as string
-    if let Ok(num) = u64::from_str_radix(hex_str, 16) {
-        serde_json::Value::Number(num.into())
+    // Try to decode as UTF-8 string first
+    if hex_str.len() % 2 == 0 && hex_str.len() <= 64 { // Reasonable length for string
+        if let Ok(bytes) = hex::decode(hex_str) {
+            // Remove trailing zeros
+            let trimmed_bytes: Vec<u8> = bytes.into_iter()
+                .rev()
+                .skip_while(|&b| b == 0)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            
+            // Try to convert to UTF-8 string
+            if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
+                // Check if it's a readable string (printable ASCII or valid UTF-8)
+                // Allow alphanumeric, spaces, and common punctuation
+                if !utf8_string.is_empty() && 
+                   utf8_string.chars().all(|c| c.is_ascii_alphanumeric() || 
+                                          c.is_ascii_punctuation() || 
+                                          c.is_whitespace()) &&
+                   utf8_string.len() > 1 { // Avoid single character strings from random hex
+                    return serde_json::Value::String(utf8_string);
+                }
+            }
+        }
+    }
+    
+    // Try to parse as number
+    if let Ok(num) = u128::from_str_radix(hex_str, 16) {
+        // If it's a reasonable number, return as decimal
+        if num <= u64::MAX as u128 {
+            serde_json::Value::Number((num as u64).into())
+        } else {
+            // For very large numbers, return as decimal string
+            serde_json::Value::String(num.to_string())
+        }
     } else {
         // Fallback to original hex value
         serde_json::Value::String(felt_hex.to_string())

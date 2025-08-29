@@ -294,13 +294,34 @@ impl AbiParser {
                     Some(serde_json::Value::String(self.felt_to_string(s)))
                 },
                 t if t.starts_with("core::integer::u") || ["u8", "u16", "u32", "u64", "u128"].contains(&t) => {
-                    // Handle unsigned integers
-                    if let Ok(num) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
+                    // Handle unsigned integers with better overflow handling
+                    let hex_str = s.trim_start_matches("0x");
+                    
+                    // Handle special case of all F's (max values)
+                    if hex_str.chars().all(|c| c == 'f' || c == 'F') {
+                        // Return the appropriate max value for the type
+                        let max_val = match t {
+                            "u8" | "core::integer::u8" => 255u64,
+                            "u16" | "core::integer::u16" => 65535u64,
+                            "u32" | "core::integer::u32" => 4294967295u64,
+                            "u64" | "core::integer::u64" => u64::MAX,
+                            _ => u64::MAX,
+                        };
+                        return Some(serde_json::Value::Number(max_val.into()));
+                    }
+                    
+                    // Try to parse as hex first
+                    if let Ok(num) = u64::from_str_radix(hex_str, 16) {
                         Some(serde_json::Value::Number(num.into()))
                     } else if let Ok(num) = s.parse::<u64>() {
                         Some(serde_json::Value::Number(num.into()))
                     } else {
-                        Some(serde_json::Value::String(s.to_string()))
+                        // For overflow cases, try u128 and return as string
+                        if let Ok(big_num) = u128::from_str_radix(hex_str, 16) {
+                            Some(serde_json::Value::String(big_num.to_string()))
+                        } else {
+                            Some(serde_json::Value::String(s.to_string()))
+                        }
                     }
                 },
                 "core::integer::u256" | "u256" => {
@@ -352,33 +373,54 @@ impl AbiParser {
         // Remove 0x prefix if present
         let hex_str = felt_hex.trim_start_matches("0x");
         
-        // Try to decode as UTF-8 string
-        if let Ok(bytes) = hex::decode(hex_str) {
-            // Remove trailing zeros
-            let trimmed_bytes: Vec<u8> = bytes.into_iter()
-                .rev()
-                .skip_while(|&b| b == 0)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            
-            // Try to convert to UTF-8 string
-            if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
-                // Check if it's a readable string (printable ASCII or valid UTF-8)
-                if utf8_string.chars().all(|c| c.is_ascii_graphic() || c.is_whitespace()) && !utf8_string.is_empty() {
-                    return utf8_string;
+        // Handle special cases first
+        if hex_str == "ffffffffffffffffffffffffffffffff" || hex_str.chars().all(|c| c == 'f' || c == 'F') {
+            // This is likely a max value or error condition, convert to decimal
+            if let Ok(num) = u128::from_str_radix(hex_str, 16) {
+                return num.to_string();
+            }
+        }
+        
+        // Try to decode as UTF-8 string first
+        if hex_str.len() % 2 == 0 && hex_str.len() <= 64 { // Reasonable length for string
+            if let Ok(bytes) = hex::decode(hex_str) {
+                // Remove trailing zeros
+                let trimmed_bytes: Vec<u8> = bytes.into_iter()
+                    .rev()
+                    .skip_while(|&b| b == 0)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                
+                // Try to convert to UTF-8 string
+                if let Ok(utf8_string) = String::from_utf8(trimmed_bytes.clone()) {
+                    // Check if it's a readable string (printable ASCII or valid UTF-8)
+                    // Allow alphanumeric, spaces, and common punctuation
+                    if !utf8_string.is_empty() && 
+                       utf8_string.chars().all(|c| c.is_ascii_alphanumeric() || 
+                                              c.is_ascii_punctuation() || 
+                                              c.is_whitespace()) &&
+                       utf8_string.len() > 1 { // Avoid single character strings from random hex
+                        return utf8_string;
+                    }
                 }
             }
         }
         
-        // If not a valid string, try to parse as number and return as string
-        if let Ok(num) = u64::from_str_radix(hex_str, 16) {
-            num.to_string()
-        } else {
-            // Fallback to original hex value
-            felt_hex.to_string()
+        // Try to parse as number (for values that should be numbers)
+        if let Ok(num) = u128::from_str_radix(hex_str, 16) {
+            // If it's a reasonable number, return as decimal string
+            if num <= u64::MAX as u128 {
+                return (num as u64).to_string();
+            } else {
+                // For very large numbers, return as decimal string
+                return num.to_string();
+            }
         }
+        
+        // Fallback to original hex value if nothing else works
+        felt_hex.to_string()
     }
     
     fn decode_struct(&self, _value: &serde_json::Value, _struct_def: &AbiType) -> serde_json::Value {
