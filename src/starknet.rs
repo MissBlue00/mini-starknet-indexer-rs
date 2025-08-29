@@ -195,6 +195,27 @@ impl AbiParser {
                                     let abi_type = Self::parse_type_definition(item);
                                     let short_name = name.split("::").last().unwrap_or(name).to_string();
                                     parser.events.insert(short_name, abi_type);
+                                } else if item.get("kind").and_then(|k| k.as_str()) == Some("enum") {
+                                    // Handle enum events - extract individual event variants
+                                    if let Some(variants) = item.get("variants").and_then(|v| v.as_array()) {
+                                        for variant in variants {
+                                            if let Some(variant_name) = variant.get("name").and_then(|n| n.as_str()) {
+                                                if let Some(variant_type) = variant.get("type").and_then(|t| t.as_str()) {
+                                                    // Look for the corresponding struct definition
+                                                    for nested_item in arr {
+                                                        if let Some(nested_name) = nested_item.get("name").and_then(|n| n.as_str()) {
+                                                            if nested_name.ends_with(variant_type) || nested_name == variant_type {
+                                                                if nested_item.get("type").and_then(|t| t.as_str()) == Some("struct") {
+                                                                    let event_struct = Self::parse_type_definition(nested_item);
+                                                                    parser.events.insert(variant_name.to_string(), event_struct);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             _ => {}
@@ -476,12 +497,38 @@ pub fn decode_event_using_abi(abi_json: &serde_json::Value, event: &serde_json::
 
     let parser = AbiParser::new(abi_json);
     
-        // Try to find matching event definition
+    // Get the event selector (first key) to match against ABI
+    let event_selector = keys.first().and_then(|k| k.as_str()).unwrap_or("");
+    
+    // Try to find matching event definition by calculating event selectors
+    let mut best_match: Option<(&String, &AbiType)> = None;
+    let mut max_matching_fields = 0;
+    
     for (event_name, event_def) in &parser.events {
-        // For now, we'll try the first struct event we find
-        // In a more sophisticated implementation, we'd match by event selector
-                let mut decoded = serde_json::Map::new();
-        let mut key_index = if keys.len() > event_def.members.len() + 1 { 2 } else { 1 }; // Skip event selectors
+        // Try to match this event definition with the actual event data
+        // We'll use a heuristic approach: find the event definition that can decode the most fields successfully
+        let expected_key_count = event_def.members.iter().filter(|m| m.is_key).count();
+        let expected_data_count = event_def.members.iter().filter(|m| !m.is_key).count();
+        
+        // Calculate how well this event definition matches the actual data structure
+        let mut matching_score = 0;
+        
+        // Check if the key/data counts make sense
+        if keys.len() >= expected_key_count + 1 && data.len() >= expected_data_count {
+            matching_score += expected_key_count + expected_data_count;
+            
+            // If this event has more matching fields than previous candidates, consider it better
+            if matching_score > max_matching_fields {
+                max_matching_fields = matching_score;
+                best_match = Some((event_name, event_def));
+            }
+        }
+    }
+    
+    // Use the best matching event definition
+    if let Some((event_name, event_def)) = best_match {
+        let mut decoded = serde_json::Map::new();
+        let mut key_index = 1; // Skip first key (event selector)
         let mut data_index = 0;
         
         // Decode each member using recursive decoding for full struct support
@@ -499,7 +546,7 @@ pub fn decode_event_using_abi(abi_json: &serde_json::Value, event: &serde_json::
         
         if !event_def.members.is_empty() {
             // Include raw keys and data for debugging
-                decoded.insert("_keys".to_string(), serde_json::Value::Array(keys.clone()));
+            decoded.insert("_keys".to_string(), serde_json::Value::Array(keys.clone()));
             decoded.insert("_raw_data".to_string(), serde_json::Value::Array(data.clone()));
             
             return (event_name.clone(), serde_json::Value::Object(decoded));
