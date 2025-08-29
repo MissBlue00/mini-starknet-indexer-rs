@@ -19,7 +19,7 @@ impl ContractQueryRoot {
         let events = parse_event_schemas(&abi_val);
         Ok(Some(Contract {
             address,
-            abi: abi_str,
+            abi: Some(abi_str),
             events,
             name: None,
             verified: true,
@@ -33,7 +33,7 @@ impl ContractQueryRoot {
             if let Ok(abi_str) = get_contract_abi_string(&rpc, &addr).await {
                 let abi_val: Value = serde_json::from_str(&abi_str).unwrap_or(Value::Array(vec![]));
                 let events = parse_event_schemas(&abi_val);
-                out.push(Contract { address: addr, abi: abi_str, events, name: None, verified: true });
+                out.push(Contract { address: addr, abi: Some(abi_str), events, name: None, verified: true });
             }
         }
         Ok(out)

@@ -549,6 +549,7 @@ impl Database {
         }))
     }
 
+    #[allow(dead_code)]
     pub async fn get_events_from_multiple_contracts(
         &self,
         contract_addresses: &[String],

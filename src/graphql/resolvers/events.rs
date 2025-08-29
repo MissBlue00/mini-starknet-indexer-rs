@@ -2,7 +2,7 @@ use async_graphql::{Context, Object, Result as GqlResult};
 use std::sync::Arc;
 
 use crate::database::Database;
-use crate::graphql::types::{Event, EventConnection, EventEdge, PageInfo, AdvancedEventQueryArgs, ContractEvents, MultiContractEventsConnection};
+use crate::graphql::types::{Event, EventConnection, EventEdge, PageInfo};
 
 fn convert_felt_to_string(felt_hex: &str) -> serde_json::Value {
     // Remove 0x prefix if present
@@ -76,14 +76,14 @@ fn convert_decoded_data_to_clean_format(decoded_json: &str) -> serde_json::Value
                     // For events like U8Event, the structure is typically:
                     // [event_selector, variant_selector, actual_value]
                     if keys_array.len() >= 3 {
-                                                       // Extract the actual value (last element in most cases)
-                               if let Some(value_key) = keys_array.last() {
-                                   if let Some(value_str) = value_key.as_str() {
-                                       // Convert felt252 hex values to readable strings
-                                       let clean_value = convert_felt_to_string(value_str);
-                                       clean_data.insert("value".to_string(), clean_value);
-                                   }
-                               }
+                        // Extract the actual value (last element in most cases)
+                        if let Some(value_key) = keys_array.last() {
+                            if let Some(value_str) = value_key.as_str() {
+                                // Convert felt252 hex values to readable strings
+                                let clean_value = convert_felt_to_string(value_str);
+                                clean_data.insert("value".to_string(), clean_value);
+                            }
+                        }
                     }
                 }
             } else {
@@ -129,258 +129,62 @@ fn convert_decoded_data_to_clean_format(decoded_json: &str) -> serde_json::Value
 
 #[Object]
 impl EventQueryRoot {
+    /// Universal events query that handles all use cases:
+    /// - Single contract: use contractAddress
+    /// - Multiple contracts: use contractAddresses  
+    /// - Advanced filtering: eventTypes, eventKeys, blocks, timestamps
+    /// - Custom ordering: orderBy parameter
+    /// - Pagination: first, after parameters
     async fn events(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "contractAddress")] contract_address: String,
+        
+        // Contract filtering - supports single contract or multiple contracts
+        #[graphql(name = "contractAddress")] contract_address: Option<String>,
+        #[graphql(name = "contractAddresses")] contract_addresses: Option<Vec<String>>,
+        
+        // Block filtering
         #[graphql(name = "fromBlock")] from_block: Option<String>,
         #[graphql(name = "toBlock")] to_block: Option<String>,
+        
+        // Event filtering
         #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>,
         #[graphql(name = "eventKeys")] event_keys: Option<Vec<String>>,
+        
+        // Timestamp filtering
         #[graphql(name = "fromTimestamp")] from_timestamp: Option<String>,
         #[graphql(name = "toTimestamp")] to_timestamp: Option<String>,
+        
+        // Transaction filtering
         #[graphql(name = "transactionHash")] transaction_hash: Option<String>,
+        
+        // Pagination and ordering
         first: Option<i32>,
         after: Option<String>,
         #[graphql(name = "orderBy")] order_by: Option<crate::graphql::types::EventOrderBy>,
     ) -> GqlResult<EventConnection> {
         let database = ctx.data::<Arc<Database>>()?.clone();
         let limit = first.unwrap_or(10).clamp(1, 100);
-        
-        // Parse pagination - offset from cursor or default to 0
         let offset = after.as_ref()
             .and_then(|cursor| cursor.parse::<i32>().ok())
             .unwrap_or(0);
 
-        // Parse block range
-        let from_block_num = from_block.as_ref()
-            .and_then(|s| s.parse::<u64>().ok());
-        let to_block_num = to_block.as_ref()
-            .and_then(|s| s.parse::<u64>().ok());
-
-        // Parse timestamp range
-        let from_timestamp_dt = from_timestamp.as_ref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-        let to_timestamp_dt = to_timestamp.as_ref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-
-        // Query events from database with advanced filters
-        let db_events = database.get_events_with_advanced_filters(
-            &contract_address,
-            event_types.as_ref().map(|v| v.as_slice()),
-            event_keys.as_ref().map(|v| v.as_slice()),
-            from_block_num,
-            to_block_num,
-            from_timestamp_dt,
-            to_timestamp_dt,
-            transaction_hash.as_deref(),
-            limit,
-            offset,
-            order_by,
-        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
-
-        // Get total count for pagination (simplified for now)
-        let total_count = database.count_events(
-            &contract_address,
-            event_types.as_ref().map(|v| v.as_slice()),
-        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))? as i32;
-
-        let mut edges: Vec<EventEdge> = Vec::new();
-        
-        for (idx, db_event) in db_events.iter().enumerate() {
-            // Parse raw data back to vec
-            let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
-                .unwrap_or_default();
-            let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
-                .unwrap_or_default();
-
-            let event = Event {
-                id: db_event.id.clone(),
-                contract_address: db_event.contract_address.clone(),
-                event_type: db_event.event_type.clone(),
-                block_number: db_event.block_number.to_string(),
-                transaction_hash: db_event.transaction_hash.clone(),
-                log_index: db_event.log_index,
-                timestamp: db_event.timestamp.to_rfc3339(),
-                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
-                raw_data,
-                raw_keys,
-            };
-            
-            let cursor = (offset + idx as i32 + limit).to_string();
-            edges.push(EventEdge { 
-                node: event, 
-                cursor: cursor.clone(),
-            });
-        }
-
-        let has_next_page = (offset + limit) < total_count;
-        let has_previous_page = offset > 0;
-        
-        let page_info = PageInfo {
-            has_next_page,
-            has_previous_page,
-            start_cursor: edges.first().map(|e| e.cursor.clone()),
-            end_cursor: edges.last().map(|e| e.cursor.clone()),
-        };
-
-        Ok(EventConnection { 
-            edges, 
-            page_info, 
-            total_count 
-        })
-    }
-
-    async fn events_advanced(
-        &self,
-        ctx: &Context<'_>,
-        args: AdvancedEventQueryArgs,
-    ) -> GqlResult<EventConnection> {
-        let database = ctx.data::<Arc<Database>>()?.clone();
-        
-        // Extract filters
-        let filters = args.filters.unwrap_or_default();
-        let pagination = args.pagination.clone().unwrap_or_default();
-        
-        let limit = pagination.first.unwrap_or(10).clamp(1, 100);
-        let offset = pagination.after.as_ref()
-            .and_then(|cursor| cursor.parse::<i32>().ok())
-            .unwrap_or(0);
-
-        // Parse block range
-        let (from_block_num, to_block_num) = if let Some(block_range) = filters.block_range {
-            (
-                block_range.from_block.as_ref().and_then(|s| s.parse::<u64>().ok()),
-                block_range.to_block.as_ref().and_then(|s| s.parse::<u64>().ok())
-            )
+        // Determine which contracts to query
+        let target_contracts = if let Some(addresses) = contract_addresses {
+            addresses
+        } else if let Some(address) = contract_address {
+            vec![address]
         } else {
-            (None, None)
+            return Err(async_graphql::Error::new("Either contractAddress or contractAddresses must be provided"));
         };
 
-        // Parse timestamp range
-        let (from_timestamp_dt, to_timestamp_dt) = if let Some(time_range) = filters.time_range {
-            (
-                time_range.from_timestamp.as_ref()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&chrono::Utc)),
-                time_range.to_timestamp.as_ref()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-            )
-        } else {
-            (None, None)
-        };
-
-        // Query events from database with advanced filters
-        let db_events = database.get_events_with_advanced_filters(
-            &args.contract_address,
-            filters.event_types.as_ref().map(|v| v.as_slice()),
-            filters.event_keys.as_ref().map(|v| v.as_slice()),
-            from_block_num,
-            to_block_num,
-            from_timestamp_dt,
-            to_timestamp_dt,
-            filters.transaction_hash.as_deref(),
-            limit,
-            offset,
-            args.pagination.as_ref().and_then(|p| p.order_by),
-        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
-
-        // Get total count for pagination (simplified for now)
-        let total_count = database.count_events(
-            &args.contract_address,
-            filters.event_types.as_ref().map(|v| v.as_slice()),
-        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))? as i32;
-
-        let mut edges: Vec<EventEdge> = Vec::new();
-        
-        for (idx, db_event) in db_events.iter().enumerate() {
-            // Parse raw data back to vec
-            let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
-                .unwrap_or_default();
-            let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
-                .unwrap_or_default();
-
-            let event = Event {
-                id: db_event.id.clone(),
-                contract_address: db_event.contract_address.clone(),
-                event_type: db_event.event_type.clone(),
-                block_number: db_event.block_number.to_string(),
-                transaction_hash: db_event.transaction_hash.clone(),
-                log_index: db_event.log_index,
-                timestamp: db_event.timestamp.to_rfc3339(),
-                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
-                raw_data,
-                raw_keys,
-            };
-            
-            let cursor = (offset + idx as i32 + limit).to_string();
-            edges.push(EventEdge { 
-                node: event, 
-                cursor: cursor.clone(),
-            });
-        }
-
-        let has_next_page = (offset + limit) < total_count;
-        let has_previous_page = offset > 0;
-        
-        let page_info = PageInfo {
-            has_next_page,
-            has_previous_page,
-            start_cursor: edges.first().map(|e| e.cursor.clone()),
-            end_cursor: edges.last().map(|e| e.cursor.clone()),
-        };
-
-        Ok(EventConnection { 
-            edges, 
-            page_info, 
-            total_count 
-        })
-    }
-
-    async fn indexer_stats(
-        &self,
-        ctx: &Context<'_>,
-        contract_address: String,
-    ) -> GqlResult<serde_json::Value> {
-        let database = ctx.data::<Arc<Database>>()?.clone();
-        
-        database.get_indexer_stats(&contract_address)
-            .await
-            .map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))
-    }
-
-    async fn events_multi_contract(
-        &self,
-        ctx: &Context<'_>,
-        contract_addresses: Vec<String>,
-        #[graphql(name = "fromBlock")] from_block: Option<String>,
-        #[graphql(name = "toBlock")] to_block: Option<String>,
-        #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>,
-        #[graphql(name = "eventKeys")] event_keys: Option<Vec<String>>,
-        #[graphql(name = "fromTimestamp")] from_timestamp: Option<String>,
-        #[graphql(name = "toTimestamp")] to_timestamp: Option<String>,
-        #[graphql(name = "transactionHash")] transaction_hash: Option<String>,
-        first: Option<i32>,
-        after: Option<String>,
-    ) -> GqlResult<EventConnection> {
-        let database = ctx.data::<Arc<Database>>()?.clone();
-        let limit = first.unwrap_or(10).clamp(1, 100);
-        
-        // Parse pagination - offset from cursor or default to 0
-        let offset = after.as_ref()
-            .and_then(|cursor| cursor.parse::<i32>().ok())
-            .unwrap_or(0);
-
-        // Parse block range
+        // Parse block numbers
         let from_block_num = from_block.as_ref()
             .and_then(|s| s.parse::<u64>().ok());
         let to_block_num = to_block.as_ref()
             .and_then(|s| s.parse::<u64>().ok());
 
-        // Parse timestamp range
+        // Parse timestamps
         let from_timestamp_dt = from_timestamp.as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
@@ -388,119 +192,13 @@ impl EventQueryRoot {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
 
-        // Query events from all contracts
-        let db_events = database.get_events_from_multiple_contracts(
-            &contract_addresses,
-            event_types.as_ref().map(|v| v.as_slice()),
-            event_keys.as_ref().map(|v| v.as_slice()),
-            from_block_num,
-            to_block_num,
-            from_timestamp_dt,
-            to_timestamp_dt,
-            transaction_hash.as_deref(),
-            limit,
-            offset,
-        ).await.map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
+        let mut all_events = Vec::new();
+        let mut total_count = 0i32;
 
-        // Calculate total count across all contracts
-        let mut total_count: i64 = 0;
-        for contract_address in &contract_addresses {
-            let count = database.count_events(
-                contract_address,
-                event_types.as_ref().map(|v| v.as_slice()),
-            ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_address, e)))?;
-            total_count += count;
-        }
-
-        let mut edges: Vec<EventEdge> = Vec::new();
-        
-        for (idx, db_event) in db_events.iter().enumerate() {
-            // Parse raw data back to vec
-            let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
-                .unwrap_or_default();
-            let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
-                .unwrap_or_default();
-
-            let event = Event {
-                id: db_event.id.clone(),
-                contract_address: db_event.contract_address.clone(),
-                event_type: db_event.event_type.clone(),
-                block_number: db_event.block_number.to_string(),
-                transaction_hash: db_event.transaction_hash.clone(),
-                log_index: db_event.log_index,
-                timestamp: db_event.timestamp.to_rfc3339(),
-                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
-                raw_data,
-                raw_keys,
-            };
-            
-            let cursor = (offset + idx as i32 + limit).to_string();
-            edges.push(EventEdge { 
-                node: event, 
-                cursor: cursor.clone(),
-            });
-        }
-
-        let has_next_page = (offset + limit) < (total_count as i32);
-        let has_previous_page = offset > 0;
-        
-        let page_info = PageInfo {
-            has_next_page,
-            has_previous_page,
-            start_cursor: edges.first().map(|e| e.cursor.clone()),
-            end_cursor: edges.last().map(|e| e.cursor.clone()),
-        };
-
-        Ok(EventConnection { 
-            edges, 
-            page_info, 
-            total_count: total_count as i32
-        })
-    }
-
-    async fn events_by_contract(
-        &self,
-        ctx: &Context<'_>,
-        contract_addresses: Vec<String>,
-        #[graphql(name = "fromBlock")] from_block: Option<String>,
-        #[graphql(name = "toBlock")] to_block: Option<String>,
-        #[graphql(name = "eventTypes")] event_types: Option<Vec<String>>,
-        #[graphql(name = "eventKeys")] event_keys: Option<Vec<String>>,
-        #[graphql(name = "fromTimestamp")] from_timestamp: Option<String>,
-        #[graphql(name = "toTimestamp")] to_timestamp: Option<String>,
-        #[graphql(name = "transactionHash")] transaction_hash: Option<String>,
-        first: Option<i32>,
-        after: Option<String>,
-    ) -> GqlResult<MultiContractEventsConnection> {
-        let database = ctx.data::<Arc<Database>>()?.clone();
-        let limit = first.unwrap_or(10).clamp(1, 100);
-        
-        // Parse pagination - offset from cursor or default to 0
-        let offset = after.as_ref()
-            .and_then(|cursor| cursor.parse::<i32>().ok())
-            .unwrap_or(0);
-
-        // Parse block range
-        let from_block_num = from_block.as_ref()
-            .and_then(|s| s.parse::<u64>().ok());
-        let to_block_num = to_block.as_ref()
-            .and_then(|s| s.parse::<u64>().ok());
-
-        // Parse timestamp range
-        let from_timestamp_dt = from_timestamp.as_ref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-        let to_timestamp_dt = to_timestamp.as_ref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-
-        let mut contract_events: Vec<ContractEvents> = Vec::new();
-        let mut total_events: i32 = 0;
-
-        // Query events for each contract separately
-        for contract_address in &contract_addresses {
+        // Query events for each contract
+        for contract_addr in &target_contracts {
             let db_events = database.get_events_with_advanced_filters(
-                contract_address,
+                contract_addr,
                 event_types.as_ref().map(|v| v.as_slice()),
                 event_keys.as_ref().map(|v| v.as_slice()),
                 from_block_num,
@@ -508,75 +206,86 @@ impl EventQueryRoot {
                 from_timestamp_dt,
                 to_timestamp_dt,
                 transaction_hash.as_deref(),
-                limit,
-                offset,
-                None, // Default ordering for individual contracts
-            ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_address, e)))?;
+                limit * target_contracts.len() as i32, // Increase limit for multiple contracts
+                0, // Always start from 0 for individual contracts, we'll paginate later
+                order_by,
+            ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_addr, e)))?;
 
             // Get total count for this contract
             let contract_total_count = database.count_events(
-                contract_address,
+                contract_addr,
                 event_types.as_ref().map(|v| v.as_slice()),
-            ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_address, e)))? as i32;
-
-            let mut edges: Vec<EventEdge> = Vec::new();
+            ).await.map_err(|e| async_graphql::Error::new(format!("Database error for contract {}: {}", contract_addr, e)))? as i32;
             
-            for (idx, db_event) in db_events.iter().enumerate() {
-                // Parse raw data back to vec
-                let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
-                    .unwrap_or_default();
-                let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
-                    .unwrap_or_default();
-
-                let event = Event {
-                    id: db_event.id.clone(),
-                    contract_address: db_event.contract_address.clone(),
-                    event_type: db_event.event_type.clone(),
-                    block_number: db_event.block_number.to_string(),
-                    transaction_hash: db_event.transaction_hash.clone(),
-                    log_index: db_event.log_index,
-                    timestamp: db_event.timestamp.to_rfc3339(),
-                    data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
-                    raw_data,
-                    raw_keys,
-                };
-                
-                let cursor = (offset + idx as i32 + limit).to_string();
-                edges.push(EventEdge { 
-                    node: event, 
-                    cursor: cursor.clone(),
-                });
-            }
-
-            let has_next_page = (offset + limit) < contract_total_count;
-            let has_previous_page = offset > 0;
-            
-            let page_info = PageInfo {
-                has_next_page,
-                has_previous_page,
-                start_cursor: edges.first().map(|e| e.cursor.clone()),
-                end_cursor: edges.last().map(|e| e.cursor.clone()),
-            };
-
-            let event_connection = EventConnection { 
-                edges, 
-                page_info, 
-                total_count: contract_total_count
-            };
-
-            contract_events.push(ContractEvents {
-                contract_address: contract_address.clone(),
-                events: event_connection,
-            });
-
-            total_events += contract_total_count;
+            total_count += contract_total_count;
+            all_events.extend(db_events);
         }
 
-        Ok(MultiContractEventsConnection {
-            contracts: contract_events,
-            total_contracts: contract_addresses.len() as i32,
-            total_events,
+        // Sort all events by the specified order (default: newest first)
+        match order_by.unwrap_or_default() {
+            crate::graphql::types::EventOrderBy::BlockNumberDesc => {
+                all_events.sort_by(|a, b| b.block_number.cmp(&a.block_number).then(b.log_index.cmp(&a.log_index)));
+            },
+            crate::graphql::types::EventOrderBy::BlockNumberAsc => {
+                all_events.sort_by(|a, b| a.block_number.cmp(&b.block_number).then(a.log_index.cmp(&b.log_index)));
+            },
+            crate::graphql::types::EventOrderBy::TimestampDesc => {
+                all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then(b.log_index.cmp(&a.log_index)));
+            },
+            crate::graphql::types::EventOrderBy::TimestampAsc => {
+                all_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.log_index.cmp(&b.log_index)));
+            },
+        }
+
+        // Apply pagination to the combined and sorted results
+        let paginated_events: Vec<_> = all_events.into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
+
+        // Convert to GraphQL events
+        let mut edges: Vec<EventEdge> = Vec::new();
+        
+        for (idx, db_event) in paginated_events.iter().enumerate() {
+            let raw_data: Vec<String> = serde_json::from_str(&db_event.raw_data)
+                .unwrap_or_default();
+            let raw_keys: Vec<String> = serde_json::from_str(&db_event.raw_keys)
+                .unwrap_or_default();
+
+            let event = Event {
+                id: db_event.id.clone(),
+                contract_address: db_event.contract_address.clone(),
+                event_type: db_event.event_type.clone(),
+                block_number: db_event.block_number.to_string(),
+                transaction_hash: db_event.transaction_hash.clone(),
+                log_index: db_event.log_index,
+                timestamp: db_event.timestamp.to_rfc3339(),
+                data: db_event.decoded_data.as_ref().map(|json| convert_decoded_data_to_clean_format(json)),
+                raw_data,
+                raw_keys,
+            };
+            
+            let cursor = (offset + idx as i32 + 1).to_string();
+            edges.push(EventEdge { 
+                node: event, 
+                cursor: cursor.clone(),
+            });
+        }
+
+        let has_next_page = (offset + limit) < total_count;
+        let has_previous_page = offset > 0;
+        
+        let page_info = PageInfo {
+            has_next_page,
+            has_previous_page,
+            start_cursor: edges.first().map(|e| e.cursor.clone()),
+            end_cursor: edges.last().map(|e| e.cursor.clone()),
+        };
+
+        Ok(EventConnection { 
+            edges, 
+            page_info, 
+            total_count 
         })
     }
 }
-

@@ -14,6 +14,7 @@ pub struct SubscriptionFilter {
 
 #[derive(Debug, Clone)]
 pub struct Subscription {
+    #[allow(dead_code)]
     pub id: String,
     pub filter: SubscriptionFilter,
     pub sender: broadcast::Sender<Event>,
@@ -52,6 +53,7 @@ impl RealtimeEventManager {
         (subscription_id, receiver)
     }
 
+    #[allow(dead_code)]
     pub async fn unsubscribe(&self, subscription_id: &str) -> bool {
         let mut subscriptions = self.subscriptions.write().await;
         subscriptions.remove(subscription_id).is_some()
@@ -103,10 +105,12 @@ impl RealtimeEventManager {
         true
     }
 
+    #[allow(dead_code)]
     pub async fn get_subscription_count(&self) -> usize {
         self.subscriptions.read().await.len()
     }
 
+    #[allow(dead_code)]
     pub async fn list_subscriptions(&self) -> Vec<SubscriptionFilter> {
         let subscriptions = self.subscriptions.read().await;
         subscriptions.values().map(|s| s.filter.clone()).collect()

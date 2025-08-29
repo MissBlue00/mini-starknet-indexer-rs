@@ -156,6 +156,7 @@ pub async fn get_transaction_by_hash(ctx: &RpcContext, tx_hash: &str) -> Result<
 // Enhanced ABI parser that fully supports unlimited nested structs
 #[derive(Debug, Clone)]
 struct AbiType {
+    #[allow(dead_code)]
     name: String,
     members: Vec<AbiMember>,
 }
@@ -271,6 +272,7 @@ impl AbiParser {
         AbiType { name, members }
     }
     
+    #[allow(dead_code)]
     fn decode_value(&self, value: &serde_json::Value, type_name: &str) -> serde_json::Value {
         // Handle basic types
         if let Some(decoded) = self.decode_basic_type(value, type_name) {
@@ -423,6 +425,7 @@ impl AbiParser {
         felt_hex.to_string()
     }
     
+    #[allow(dead_code)]
     fn decode_struct(&self, _value: &serde_json::Value, _struct_def: &AbiType) -> serde_json::Value {
         // Struct decoding is complex because structs are serialized as flattened values
         // This requires a different approach - we need to handle this at the event level
@@ -430,6 +433,7 @@ impl AbiParser {
         serde_json::Value::Null
     }
     
+    #[allow(dead_code)]
     fn decode_struct_from_arrays(&self, keys: &[serde_json::Value], data: &[serde_json::Value], 
                                  struct_def: &AbiType, key_index: &mut usize, data_index: &mut usize) -> serde_json::Value {
         let mut decoded = serde_json::Map::new();
@@ -493,6 +497,7 @@ impl AbiParser {
         value.clone()
     }
     
+    #[allow(dead_code)]
     fn decode_array(&self, _keys: &[serde_json::Value], _data: &[serde_json::Value], 
                    value: &serde_json::Value, _type_name: &str, 
                    _key_index: &mut usize, _data_index: &mut usize) -> serde_json::Value {
@@ -502,8 +507,9 @@ impl AbiParser {
         value.clone()
     }
     
+    #[allow(dead_code)]
     fn decode_option(&self, _keys: &[serde_json::Value], _data: &[serde_json::Value], 
-                    value: &serde_json::Value, _type_name: &str,
+                    value: &serde_json::Value, _type_name: &str, 
                     _key_index: &mut usize, _data_index: &mut usize) -> serde_json::Value {
         // Option decoding: first value indicates Some(0) or None(1), then the value if Some
         // For now, return the raw value
@@ -540,7 +546,7 @@ pub fn decode_event_using_abi(abi_json: &serde_json::Value, event: &serde_json::
     let parser = AbiParser::new(abi_json);
     
     // Get the event selector (first key) to match against ABI
-    let event_selector = keys.first().and_then(|k| k.as_str()).unwrap_or("");
+    let _event_selector = keys.first().and_then(|k| k.as_str()).unwrap_or("");
     
     // Try to find matching event definition by calculating event selectors
     let mut best_match: Option<(&String, &AbiType)> = None;
@@ -606,6 +612,7 @@ pub fn decode_event_using_abi(abi_json: &serde_json::Value, event: &serde_json::
     ("Unknown".to_string(), serde_json::Value::Object(decoded))
 }
 
+#[allow(dead_code)]
 fn decode_cairo_value(value: &serde_json::Value, cairo_type: &str) -> serde_json::Value {
     match value {
         serde_json::Value::String(s) => {
