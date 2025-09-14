@@ -1,101 +1,142 @@
 import Link from "next/link";
+import { Database, Zap, BarChart3, Shield, ArrowRight, Play } from 'lucide-react';
 
 export default function Home() {
   return (
-    <div className="font-sans min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
-      <div className="container mx-auto px-4 py-12">
-        {/* Header */}
-        <header className="text-center mb-16">
-          <h1 className="text-5xl md:text-6xl font-bold text-gray-900 dark:text-white mb-6">
-            Starknet Indexer
-          </h1>
-          <p className="text-xl md:text-2xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto mb-8">
-            Real-time blockchain data indexing for Starknet. Fast, reliable, and scalable infrastructure for your dApps.
-          </p>
-          
-          <div className="flex gap-4 items-center justify-center flex-col sm:flex-row">
-            <Link
-              href="/pricing"
-              className="rounded-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-lg px-8 py-4 transition-colors shadow-lg hover:shadow-xl"
-            >
-              View Pricing
-            </Link>
-            <button className="rounded-full border-2 border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white font-semibold text-lg px-8 py-4 transition-colors">
-              Get Started Free
-            </button>
-          </div>
-        </header>
-
-        {/* Features */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16">
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
-            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+    <div className="min-h-screen bg-slate-950 text-white">
+      {/* Hero Section */}
+      <div className="relative overflow-hidden">
+        {/* Background gradient */}
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 via-slate-950 to-purple-900/20"></div>
+        <div className="absolute inset-0 opacity-20">
+          <div className="absolute inset-0" style={{
+            backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.15) 1px, transparent 0)`,
+            backgroundSize: '20px 20px'
+          }}></div>
+        </div>
+        
+        <div className="relative max-w-7xl mx-auto px-6 py-20 sm:py-32">
+          <div className="text-center">
+            <div className="mb-8">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-900/30 border border-blue-800/50 rounded-full text-blue-300 text-sm font-medium">
+                <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                Live on Starknet
+              </div>
             </div>
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Real-time Updates</h3>
-            <p className="text-gray-600 dark:text-gray-300">Get instant updates on blockchain events with WebSocket connections.</p>
-          </div>
-
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
-            <div className="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">99.9% Uptime</h3>
-            <p className="text-gray-600 dark:text-gray-300">Enterprise-grade reliability with comprehensive monitoring and alerts.</p>
-          </div>
-
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
-            <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-lg flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m-9 0h10m-10 0l1 16a2 2 0 002 2h6a2 2 0 002-2l1-16" />
-              </svg>
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">GraphQL API</h3>
-            <p className="text-gray-600 dark:text-gray-300">Flexible queries with GraphQL for efficient data fetching.</p>
-          </div>
-        </section>
-
-        {/* Stats */}
-        <section className="bg-white dark:bg-gray-800 rounded-2xl p-8 shadow-xl mb-16">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 text-center">
-            <div>
-              <div className="text-3xl font-bold text-blue-600 mb-2">1M+</div>
-              <div className="text-gray-600 dark:text-gray-300">Requests Served</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-green-600 mb-2">50ms</div>
-              <div className="text-gray-600 dark:text-gray-300">Average Response</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-purple-600 mb-2">24/7</div>
-              <div className="text-gray-600 dark:text-gray-300">Support Available</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-orange-600 mb-2">100+</div>
-              <div className="text-gray-600 dark:text-gray-300">Happy Developers</div>
+            
+            <h1 className="text-5xl sm:text-7xl font-bold bg-gradient-to-r from-white via-blue-100 to-blue-300 bg-clip-text text-transparent mb-6">
+              Starknet Indexer
+            </h1>
+            
+            <p className="text-xl sm:text-2xl text-slate-300 mb-12 max-w-3xl mx-auto leading-relaxed">
+              The most powerful way to monitor, analyze, and query your Starknet smart contract deployments with real-time insights
+            </p>
+            
+            <div className="flex gap-4 items-center justify-center flex-col sm:flex-row">
+              <Link
+                href="/deployments"
+                className="group relative inline-flex items-center justify-center px-8 py-4 bg-blue-600 hover:bg-blue-700 rounded-xl text-white font-semibold transition-all duration-200 transform hover:scale-105 hover:shadow-xl hover:shadow-blue-500/25"
+              >
+                <Database className="h-5 w-5 mr-2" />
+                Explore Dashboard
+                <ArrowRight className="h-4 w-4 ml-2 group-hover:translate-x-1 transition-transform" />
+              </Link>
+              
+              <a
+                href="http://localhost:3000/graphiql"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group inline-flex items-center justify-center px-8 py-4 border border-slate-700 hover:border-slate-600 rounded-xl text-slate-300 hover:text-white font-semibold transition-all duration-200 hover:bg-slate-800/50"
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Try GraphQL API
+              </a>
             </div>
           </div>
-        </section>
+        </div>
+      </div>
 
-        {/* CTA */}
-        <section className="text-center">
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
-            Ready to get started?
-          </h2>
-          <p className="text-xl text-gray-600 dark:text-gray-300 mb-8">
-            Join thousands of developers building on Starknet with our indexing infrastructure.
-          </p>
-          <Link
-            href="/pricing"
-            className="inline-block rounded-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-lg px-8 py-4 transition-colors shadow-lg hover:shadow-xl"
-          >
-            Choose Your Plan
-          </Link>
-        </section>
+      {/* Features Section */}
+      <div className="py-20 bg-slate-900/30">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+              Everything you need to monitor Starknet
+            </h2>
+            <p className="text-slate-400 text-lg max-w-2xl mx-auto">
+              Professional-grade tools for indexing, querying, and analyzing smart contract events with enterprise reliability
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 hover:bg-slate-800/50 transition-all duration-200 group">
+              <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Database className="h-6 w-6 text-blue-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">Real-time Indexing</h3>
+              <p className="text-slate-400 text-sm">
+                Monitor contract events as they happen with sub-second latency and automatic ABI decoding
+              </p>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 hover:bg-slate-800/50 transition-all duration-200 group">
+              <div className="w-12 h-12 bg-purple-600/10 border border-purple-500/20 rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <BarChart3 className="h-6 w-6 text-purple-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">Advanced Analytics</h3>
+              <p className="text-slate-400 text-sm">
+                Deep insights with filtering, aggregation, and visualization tools for contract behavior
+              </p>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 hover:bg-slate-800/50 transition-all duration-200 group">
+              <div className="w-12 h-12 bg-green-600/10 border border-green-500/20 rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Zap className="h-6 w-6 text-green-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">GraphQL API</h3>
+              <p className="text-slate-400 text-sm">
+                Powerful, flexible queries with subscriptions for real-time updates and custom integrations
+              </p>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 hover:bg-slate-800/50 transition-all duration-200 group">
+              <div className="w-12 h-12 bg-orange-600/10 border border-orange-500/20 rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Shield className="h-6 w-6 text-orange-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">Enterprise Ready</h3>
+              <p className="text-slate-400 text-sm">
+                Production-grade reliability with rate limiting, error handling, and scalable architecture
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Section */}
+      <div className="py-20">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center">
+            <h2 className="text-3xl font-bold text-white mb-12">Trusted by developers worldwide</h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+              <div className="text-center">
+                <div className="text-3xl font-bold text-blue-400 mb-2">99.9%</div>
+                <div className="text-slate-400 text-sm">Uptime</div>
+              </div>
+              <div className="text-center">
+                <div className="text-3xl font-bold text-purple-400 mb-2">1M+</div>
+                <div className="text-slate-400 text-sm">Events Indexed</div>
+              </div>
+              <div className="text-center">
+                <div className="text-3xl font-bold text-green-400 mb-2">&lt;100ms</div>
+                <div className="text-slate-400 text-sm">Query Response</div>
+              </div>
+              <div className="text-center">
+                <div className="text-3xl font-bold text-orange-400 mb-2">24/7</div>
+                <div className="text-slate-400 text-sm">Monitoring</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

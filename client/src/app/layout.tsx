@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ApolloWrapper } from './apollo-wrapper';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Starknet Indexer - Real-time Blockchain Data",
-  description: "Fast, reliable, and scalable Starknet blockchain data indexing infrastructure for your dApps. Real-time updates, GraphQL API, and enterprise-grade reliability.",
+  title: "Starknet Indexer - Contract Deployments",
+  description: "Monitor and analyze Starknet smart contract deployments and events with real-time indexing and GraphQL API",
 };
 
 export default function RootLayout({
@@ -27,7 +28,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <ApolloWrapper>
+          {children}
+        </ApolloWrapper>
       </body>
     </html>
   );
