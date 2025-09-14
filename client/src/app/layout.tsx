@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Starknet Indexer - Contract Deployments",
-  description: "Monitor and analyze Starknet smart contract deployments and events",
+  description: "Monitor and analyze Starknet smart contract deployments and events with real-time indexing and GraphQL API",
 };
 
 export default function RootLayout({

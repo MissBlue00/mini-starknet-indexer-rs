@@ -44,8 +44,8 @@ export default function Home() {
               
               <a
                 href="http://localhost:3000/graphiql"
-            target="_blank"
-            rel="noopener noreferrer"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="group inline-flex items-center justify-center px-8 py-4 border border-slate-700 hover:border-slate-600 rounded-xl text-slate-300 hover:text-white font-semibold transition-all duration-200 hover:bg-slate-800/50"
               >
                 <Play className="h-4 w-4 mr-2" />
