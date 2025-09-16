@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { PaymentModal } from '../../components/PaymentModal';
 
 // Mock API function for pricing rates
 const fetchPricingRates = async () => {
@@ -63,8 +64,37 @@ export default function PricingPage() {
   const [pricingMode, setPricingMode] = useState<PricingMode>('payAsYouGo');
   const [usdcAmount, setUsdcAmount] = useState<string>('100');
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly');
-  const [pricingData, setPricingData] = useState<any>(null);
+  const [pricingData, setPricingData] = useState<{
+    payAsYouGo: {
+      usdcPerRequest: number;
+      minimumAmount: number;
+    };
+    subscriptions: {
+      plans: Array<{
+        id: string;
+        name: string;
+        requestsPerSecond: number | string;
+        monthlyPrice: number | string;
+        discount: number;
+        description: string;
+      }>;
+      discounts: {
+        quarterly: number;
+        semiannual: number;
+        annual: number;
+      };
+    };
+  } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [paymentModal, setPaymentModal] = useState<{
+    isOpen: boolean;
+    amount: number;
+    planName?: string;
+  }>({
+    isOpen: false,
+    amount: 0,
+    planName: undefined,
+  });
 
   useEffect(() => {
     const loadPricingData = async () => {
@@ -89,7 +119,9 @@ export default function PricingPage() {
   const calculateDiscountedPrice = (basePrice: number | string) => {
     if (typeof basePrice !== 'number') return basePrice;
     
-    const discounts = pricingData?.subscriptions.discounts || {};
+    const discounts = pricingData?.subscriptions.discounts;
+    if (!discounts) return basePrice;
+    
     let discount = 0;
     
     switch (billingPeriod) {
@@ -116,6 +148,29 @@ export default function PricingPage() {
       case 'annual': return 12;
       default: return 1;
     }
+  };
+
+  const openPaymentModal = (amount: number, planName?: string) => {
+    setPaymentModal({
+      isOpen: true,
+      amount,
+      planName,
+    });
+  };
+
+  const closePaymentModal = () => {
+    setPaymentModal({
+      isOpen: false,
+      amount: 0,
+      planName: undefined,
+    });
+  };
+
+  const handlePaymentSuccess = (txHash: string) => {
+    console.log('Payment successful:', txHash);
+    // You can add additional success handling here
+    // e.g., updating user credits, showing success message, etc.
+    closePaymentModal();
   };
 
   if (loading) {
@@ -216,7 +271,10 @@ export default function PricingPage() {
                   </div>
                 </div>
 
-                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors">
+                <button 
+                  onClick={() => openPaymentModal(parseFloat(usdcAmount) || 0, 'Pay as You Go')}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                >
                   Fund Account
                 </button>
               </div>
@@ -232,7 +290,8 @@ export default function PricingPage() {
               <div className="bg-white dark:bg-gray-800 p-1 rounded-lg shadow-lg">
                 {(['monthly', 'quarterly', 'semiannual', 'annual'] as BillingPeriod[]).map((period) => {
                   const getDiscountForPeriod = () => {
-                    const discounts = pricingData?.subscriptions.discounts || {};
+                    const discounts = pricingData?.subscriptions.discounts;
+                    if (!discounts) return 0;
                     switch (period) {
                       case 'quarterly': return discounts.quarterly * 100;
                       case 'semiannual': return discounts.semiannual * 100;
@@ -265,7 +324,7 @@ export default function PricingPage() {
 
             {/* Subscription Plans */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {pricingData?.subscriptions.plans.map((plan: any, index: number) => (
+              {pricingData?.subscriptions.plans.map((plan, index: number) => (
                 <div
                   key={plan.id}
                   className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 relative ${
@@ -337,6 +396,15 @@ export default function PricingPage() {
                   </div>
 
                   <button 
+                    onClick={() => {
+                      if (plan.id === 'custom') {
+                        // Handle custom plan contact
+                        console.log('Contact sales for custom plan');
+                      } else {
+                        const planPrice = Number(calculateDiscountedPrice(plan.monthlyPrice)) * Number(getBillingMultiplier());
+                        openPaymentModal(planPrice, plan.name);
+                      }
+                    }}
                     className={`w-full py-3 px-6 rounded-lg font-semibold transition-colors ${
                       index === 1
                         ? 'bg-blue-600 hover:bg-blue-700 text-white'
@@ -359,6 +427,15 @@ export default function PricingPage() {
             </div>
           </div>
         )}
+
+        {/* Payment Modal */}
+        <PaymentModal
+          isOpen={paymentModal.isOpen}
+          onClose={closePaymentModal}
+          amount={paymentModal.amount}
+          planName={paymentModal.planName}
+          onPaymentSuccess={handlePaymentSuccess}
+        />
       </div>
     </div>
   );
