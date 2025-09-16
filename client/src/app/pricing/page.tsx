@@ -63,7 +63,27 @@ export default function PricingPage() {
   const [pricingMode, setPricingMode] = useState<PricingMode>('payAsYouGo');
   const [usdcAmount, setUsdcAmount] = useState<string>('100');
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly');
-  const [pricingData, setPricingData] = useState<any>(null);
+  const [pricingData, setPricingData] = useState<{
+    payAsYouGo: {
+      usdcPerRequest: number;
+      minimumAmount: number;
+    };
+    subscriptions: {
+      plans: Array<{
+        id: string;
+        name: string;
+        requestsPerSecond: number | string;
+        monthlyPrice: number | string;
+        discount: number;
+        description: string;
+      }>;
+      discounts: {
+        quarterly: number;
+        semiannual: number;
+        annual: number;
+      };
+    };
+  } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -89,18 +109,22 @@ export default function PricingPage() {
   const calculateDiscountedPrice = (basePrice: number | string) => {
     if (typeof basePrice !== 'number') return basePrice;
     
-    const discounts = pricingData?.subscriptions.discounts || {};
+    const discounts = pricingData?.subscriptions.discounts || {
+      quarterly: 0,
+      semiannual: 0,
+      annual: 0
+    };
     let discount = 0;
     
     switch (billingPeriod) {
       case 'quarterly':
-        discount = discounts.quarterly;
+        discount = discounts.quarterly || 0;
         break;
       case 'semiannual':
-        discount = discounts.semiannual;
+        discount = discounts.semiannual || 0;
         break;
       case 'annual':
-        discount = discounts.annual;
+        discount = discounts.annual || 0;
         break;
       default:
         discount = 0;
@@ -232,11 +256,15 @@ export default function PricingPage() {
               <div className="bg-white dark:bg-gray-800 p-1 rounded-lg shadow-lg">
                 {(['monthly', 'quarterly', 'semiannual', 'annual'] as BillingPeriod[]).map((period) => {
                   const getDiscountForPeriod = () => {
-                    const discounts = pricingData?.subscriptions.discounts || {};
+                    const discounts = pricingData?.subscriptions.discounts || {
+                      quarterly: 0,
+                      semiannual: 0,
+                      annual: 0
+                    };
                     switch (period) {
-                      case 'quarterly': return discounts.quarterly * 100;
-                      case 'semiannual': return discounts.semiannual * 100;
-                      case 'annual': return discounts.annual * 100;
+                      case 'quarterly': return (discounts.quarterly || 0) * 100;
+                      case 'semiannual': return (discounts.semiannual || 0) * 100;
+                      case 'annual': return (discounts.annual || 0) * 100;
                       default: return 0;
                     }
                   };
@@ -265,7 +293,7 @@ export default function PricingPage() {
 
             {/* Subscription Plans */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {pricingData?.subscriptions.plans.map((plan: any, index: number) => (
+              {pricingData?.subscriptions.plans.map((plan, index: number) => (
                 <div
                   key={plan.id}
                   className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 relative ${

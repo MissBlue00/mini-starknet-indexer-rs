@@ -38,6 +38,54 @@ impl ContractQueryRoot {
         }
         Ok(out)
     }
+
+    /// Get all deployed contracts (unique contract addresses from events)
+    async fn deployments(&self, ctx: &Context<'_>, first: Option<i32>, after: Option<String>) -> GqlResult<Vec<Contract>> {
+        let database = ctx.data::<std::sync::Arc<crate::database::Database>>()?.clone();
+        let rpc = ctx.data::<RpcContext>()?.clone();
+        
+        // Get unique contract addresses from the database
+        let addresses = database.get_all_contract_addresses().await
+            .map_err(|e| async_graphql::Error::new(format!("Database error: {}", e)))?;
+        
+        let limit = first.unwrap_or(20).clamp(1, 100) as usize;
+        let offset = after.as_ref()
+            .and_then(|cursor| cursor.parse::<usize>().ok())
+            .unwrap_or(0);
+        
+        let mut contracts = Vec::new();
+        for addr in addresses.into_iter().skip(offset).take(limit) {
+            // Get contract stats from database
+            let stats = database.get_indexer_stats(&addr).await
+                .map_err(|e| async_graphql::Error::new(format!("Database error for {}: {}", addr, e)))?;
+            
+            // Try to get ABI and events
+            let (abi_str, events) = match get_contract_abi_string(&rpc, &addr).await {
+                Ok(abi) => {
+                    let abi_val: Value = serde_json::from_str(&abi).unwrap_or(Value::Array(vec![]));
+                    let events = parse_event_schemas(&abi_val);
+                    (Some(abi), events)
+                },
+                Err(_) => (None, vec![])
+            };
+            
+            // Extract contract name from stats or use a default
+            let name = stats.get("contract_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let verified = abi_str.is_some();
+            contracts.push(Contract {
+                address: addr,
+                name,
+                abi: abi_str,
+                events,
+                verified,
+            });
+        }
+        
+        Ok(contracts)
+    }
 }
 
 fn parse_event_schemas(abi: &Value) -> Vec<EventSchema> {

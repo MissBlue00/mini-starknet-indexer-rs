@@ -549,6 +549,20 @@ impl Database {
         }))
     }
 
+    pub async fn get_all_contract_addresses(&self) -> Result<Vec<String>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT contract_address FROM events ORDER BY contract_address"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        
+        let addresses: Vec<String> = rows.into_iter()
+            .map(|row| row.get("contract_address"))
+            .collect();
+        
+        Ok(addresses)
+    }
+
     #[allow(dead_code)]
     pub async fn get_events_from_multiple_contracts(
         &self,
