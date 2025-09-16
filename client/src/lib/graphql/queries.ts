@@ -75,3 +75,23 @@ export const GET_CONTRACT = gql`
     }
   }
 `;
+
+export const GET_DEPLOYMENTS = gql`
+  query GetDeployments($first: Int, $after: String) {
+    deployments(first: $first, after: $after) {
+      address
+      name
+      verified
+      events {
+        name
+        type
+        inputs {
+          name
+          type
+          indexed
+        }
+        anonymous
+      }
+    }
+  }
+`;
