@@ -9,23 +9,28 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "next": "15.5.3",
     "@apollo/client": "^3.8.8",
+    "@starknet-react/chains": "^5.0.2",
+    "@starknet-react/core": "^5.0.2",
+    "clsx": "^2.0.0",
+    "get-starknet-core": "^3.3.5",
     "graphql": "^16.8.1",
     "lucide-react": "^0.263.1",
-    "clsx": "^2.0.0"
+    "next": "15.5.3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "starknet": "^7.6.4",
+    "starknetkit": "^3.0.3"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@tailwindcss/postcss": "^4",
-    "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.3",
-    "@eslint/eslintrc": "^3"
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }

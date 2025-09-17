@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { PaymentModal } from '../../components/PaymentModal';
 
 // Mock API function for pricing rates
 const fetchPricingRates = async () => {
@@ -85,6 +86,15 @@ export default function PricingPage() {
     };
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [paymentModal, setPaymentModal] = useState<{
+    isOpen: boolean;
+    amount: number;
+    planName?: string;
+  }>({
+    isOpen: false,
+    amount: 0,
+    planName: undefined,
+  });
 
   useEffect(() => {
     const loadPricingData = async () => {
@@ -140,6 +150,29 @@ export default function PricingPage() {
       case 'annual': return 12;
       default: return 1;
     }
+  };
+
+  const openPaymentModal = (amount: number, planName?: string) => {
+    setPaymentModal({
+      isOpen: true,
+      amount,
+      planName,
+    });
+  };
+
+  const closePaymentModal = () => {
+    setPaymentModal({
+      isOpen: false,
+      amount: 0,
+      planName: undefined,
+    });
+  };
+
+  const handlePaymentSuccess = (txHash: string) => {
+    console.log('Payment successful:', txHash);
+    // You can add additional success handling here
+    // e.g., updating user credits, showing success message, etc.
+    closePaymentModal();
   };
 
   if (loading) {
@@ -240,7 +273,10 @@ export default function PricingPage() {
                   </div>
                 </div>
 
-                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors">
+                <button 
+                  onClick={() => openPaymentModal(parseFloat(usdcAmount) || 0, 'Pay as You Go')}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                >
                   Fund Account
                 </button>
               </div>
@@ -365,6 +401,15 @@ export default function PricingPage() {
                   </div>
 
                   <button 
+                    onClick={() => {
+                      if (plan.id === 'custom') {
+                        // Handle custom plan contact
+                        console.log('Contact sales for custom plan');
+                      } else {
+                        const planPrice = Number(calculateDiscountedPrice(plan.monthlyPrice)) * Number(getBillingMultiplier());
+                        openPaymentModal(planPrice, plan.name);
+                      }
+                    }}
                     className={`w-full py-3 px-6 rounded-lg font-semibold transition-colors ${
                       index === 1
                         ? 'bg-blue-600 hover:bg-blue-700 text-white'
@@ -387,6 +432,15 @@ export default function PricingPage() {
             </div>
           </div>
         )}
+
+        {/* Payment Modal */}
+        <PaymentModal
+          isOpen={paymentModal.isOpen}
+          onClose={closePaymentModal}
+          amount={paymentModal.amount}
+          planName={paymentModal.planName}
+          onPaymentSuccess={handlePaymentSuccess}
+        />
       </div>
     </div>
   );
