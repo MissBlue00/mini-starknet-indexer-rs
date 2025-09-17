@@ -30,6 +30,14 @@ A high-performance Rust-based Starknet event indexer with unified GraphQL API, r
 - **Database Optimization**: Advanced filtering and indexing for fast queries
 - **Address Normalization**: Automatic Starknet address validation and padding
 
+### 🗄️ **Deployment Database Tracking**
+- **Multi-Deployment Management**: Track multiple deployment databases by unique ID
+- **Semi-Mock Implementation**: Ready for production with extensible architecture
+- **GraphQL CRUD Operations**: Complete create, read, update, delete operations for deployments
+- **Automatic Database Creation**: Each deployment gets its own SQLite database file
+- **Metadata Support**: Store custom JSON metadata for each deployment
+- **Network & Status Filtering**: Filter deployments by network (mainnet/testnet) and status
+
 ## 📋 Quick Start
 
 ### Prerequisites
@@ -101,6 +109,92 @@ All contract addresses are automatically:
 # Invalid addresses cause errors:
 ❌ invalid_address → "contract address must start with 0x"
 ❌ 0xinvalid      → "contract address must be hexadecimal"
+```
+
+## 🗄️ Deployment Management API
+
+### Create a New Deployment
+```graphql
+mutation CreateDeployment($input: CreateDeploymentInput!) {
+  createDeployment(input: $input) {
+    id
+    name
+    description
+    databaseUrl
+    contractAddress
+    network
+    status
+    createdAt
+    metadata
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "name": "My DeFi Protocol",
+    "description": "Tracking events for our DeFi protocol",
+    "network": "mainnet",
+    "contractAddress": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "metadata": {
+      "version": "1.0.0",
+      "owner": "defi-team"
+    }
+  }
+}
+```
+
+### List Deployments with Filtering
+```graphql
+query GetDeployments($filter: DeploymentFilter, $first: Int) {
+  deployments(filter: $filter, first: $first) {
+    edges {
+      node {
+        id
+        name
+        network
+        status
+        contractAddress
+        createdAt
+      }
+    }
+    totalCount
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "filter": {
+    "status": "ACTIVE",
+    "network": "mainnet"
+  },
+  "first": 10
+}
+```
+
+### Update Deployment Status
+```graphql
+mutation UpdateDeployment($input: UpdateDeploymentInput!) {
+  updateDeployment(input: $input) {
+    id
+    status
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "id": "deployment-uuid-here",
+    "status": "INACTIVE"
+  }
+}
 ```
 
 ## 🎯 Unified GraphQL API

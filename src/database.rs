@@ -26,6 +26,20 @@ pub struct IndexerState {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeploymentRecord {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub database_url: String,
+    pub contract_address: Option<String>,
+    pub network: String,
+    pub status: String, // "active", "inactive", "error"
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub metadata: Option<String>, // JSON metadata
+}
+
 pub struct Database {
     pub pool: SqlitePool,
 }
@@ -79,6 +93,23 @@ impl Database {
             "#
         ).execute(&pool).await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS deployments (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                database_url TEXT NOT NULL,
+                contract_address TEXT,
+                network TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                metadata TEXT
+            )
+            "#
+        ).execute(&pool).await?;
+
         // Create indexes for fast queries
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract_block ON events(contract_address, block_number)")
             .execute(&pool).await?;
@@ -87,6 +118,16 @@ impl Database {
             .execute(&pool).await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)")
+            .execute(&pool).await?;
+            
+        // Create indexes for deployments table
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_network ON deployments(network)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_contract_address ON deployments(contract_address)")
             .execute(&pool).await?;
 
         Ok(Database { pool })
@@ -607,5 +648,202 @@ impl Database {
         all_events.truncate(limit as usize);
         
         Ok(all_events)
+    }
+
+    // Deployment management methods
+    pub async fn create_deployment(&self, deployment: &DeploymentRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO deployments (id, name, description, database_url, contract_address, network, status, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&deployment.id)
+        .bind(&deployment.name)
+        .bind(&deployment.description)
+        .bind(&deployment.database_url)
+        .bind(&deployment.contract_address)
+        .bind(&deployment.network)
+        .bind(&deployment.status)
+        .bind(deployment.created_at.to_rfc3339())
+        .bind(deployment.updated_at.to_rfc3339())
+        .bind(&deployment.metadata)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_deployment(&self, id: &str) -> Result<Option<DeploymentRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, name, description, database_url, contract_address, network, status, created_at, updated_at, metadata 
+             FROM deployments WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(Some(DeploymentRecord {
+                id: row.get("id"),
+                name: row.get("name"),
+                description: row.get("description"),
+                database_url: row.get("database_url"),
+                contract_address: row.get("contract_address"),
+                network: row.get("network"),
+                status: row.get("status"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                metadata: row.get("metadata"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_deployments(
+        &self,
+        status: Option<&str>,
+        network: Option<&str>,
+        limit: i32,
+        offset: i32,
+    ) -> Result<Vec<DeploymentRecord>, sqlx::Error> {
+        let mut query = "SELECT id, name, description, database_url, contract_address, network, status, created_at, updated_at, metadata FROM deployments".to_string();
+        let mut conditions = Vec::new();
+        
+        if status.is_some() {
+            conditions.push("status = ?");
+        }
+        if network.is_some() {
+            conditions.push("network = ?");
+        }
+        
+        if !conditions.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&conditions.join(" AND "));
+        }
+        
+        query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+        
+        let mut sql_query = sqlx::query(&query);
+        
+        if let Some(s) = status {
+            sql_query = sql_query.bind(s);
+        }
+        if let Some(n) = network {
+            sql_query = sql_query.bind(n);
+        }
+        
+        sql_query = sql_query.bind(limit as i64).bind(offset as i64);
+        
+        let rows = sql_query.fetch_all(&self.pool).await?;
+        
+        let mut deployments = Vec::new();
+        for row in rows {
+            deployments.push(DeploymentRecord {
+                id: row.get("id"),
+                name: row.get("name"),
+                description: row.get("description"),
+                database_url: row.get("database_url"),
+                contract_address: row.get("contract_address"),
+                network: row.get("network"),
+                status: row.get("status"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                metadata: row.get("metadata"),
+            });
+        }
+        
+        Ok(deployments)
+    }
+
+    pub async fn update_deployment(&self, id: &str, name: Option<&str>, description: Option<&str>, status: Option<&str>, contract_address: Option<&str>, metadata: Option<&str>) -> Result<(), sqlx::Error> {
+        let now = Utc::now();
+        let mut updates = Vec::new();
+        let mut values: Vec<&str> = Vec::new();
+        
+        if let Some(n) = name {
+            updates.push("name = ?");
+            values.push(n);
+        }
+        if let Some(d) = description {
+            updates.push("description = ?");
+            values.push(d);
+        }
+        if let Some(s) = status {
+            updates.push("status = ?");
+            values.push(s);
+        }
+        if let Some(c) = contract_address {
+            updates.push("contract_address = ?");
+            values.push(c);
+        }
+        if let Some(m) = metadata {
+            updates.push("metadata = ?");
+            values.push(m);
+        }
+        
+        if updates.is_empty() {
+            return Ok(()); // Nothing to update
+        }
+        
+        updates.push("updated_at = ?");
+        let now_str = now.to_rfc3339();
+        
+        let query = format!("UPDATE deployments SET {} WHERE id = ?", updates.join(", "));
+        
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+        sql_query = sql_query.bind(&now_str).bind(id);
+        
+        sql_query.execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn delete_deployment(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM deployments WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn count_deployments(&self, status: Option<&str>, network: Option<&str>) -> Result<i64, sqlx::Error> {
+        let mut query = "SELECT COUNT(*) FROM deployments".to_string();
+        let mut conditions = Vec::new();
+        
+        if status.is_some() {
+            conditions.push("status = ?");
+        }
+        if network.is_some() {
+            conditions.push("network = ?");
+        }
+        
+        if !conditions.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&conditions.join(" AND "));
+        }
+        
+        let mut sql_query = sqlx::query_scalar(&query);
+        
+        if let Some(s) = status {
+            sql_query = sql_query.bind(s);
+        }
+        if let Some(n) = network {
+            sql_query = sql_query.bind(n);
+        }
+        
+        let count: i64 = sql_query.fetch_one(&self.pool).await?;
+        Ok(count)
     }
 }

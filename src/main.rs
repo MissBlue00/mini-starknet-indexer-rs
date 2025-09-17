@@ -21,6 +21,7 @@ mod starknet;
 mod database;
 mod indexer;
 mod realtime;
+mod deployment_service;
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]

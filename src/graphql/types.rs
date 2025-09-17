@@ -1,4 +1,4 @@
-use async_graphql::SimpleObject;
+use async_graphql::{SimpleObject, InputObject, Enum};
 use serde_json;
 
 #[derive(SimpleObject, Clone)]
@@ -102,4 +102,92 @@ pub struct EventSchema {
     pub r#type: String,
     pub inputs: Vec<EventInput>,
     pub anonymous: bool,
+}
+
+// Deployment types
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Deployment {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub database_url: String,
+    pub contract_address: Option<String>,
+    pub network: String,
+    pub status: DeploymentStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum DeploymentStatus {
+    Active,
+    Inactive,
+    Error,
+}
+
+impl From<&str> for DeploymentStatus {
+    fn from(s: &str) -> Self {
+        match s {
+            "active" => DeploymentStatus::Active,
+            "inactive" => DeploymentStatus::Inactive,
+            "error" => DeploymentStatus::Error,
+            _ => DeploymentStatus::Inactive,
+        }
+    }
+}
+
+impl From<DeploymentStatus> for &'static str {
+    fn from(status: DeploymentStatus) -> Self {
+        match status {
+            DeploymentStatus::Active => "active",
+            DeploymentStatus::Inactive => "inactive",
+            DeploymentStatus::Error => "error",
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct DeploymentConnection {
+    pub edges: Vec<DeploymentEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct DeploymentEdge {
+    pub node: Deployment,
+    pub cursor: String,
+}
+
+// Input types for deployment mutations
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct CreateDeploymentInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub network: String,
+    pub contract_address: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct UpdateDeploymentInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<DeploymentStatus>,
+    pub contract_address: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct DeploymentFilter {
+    pub status: Option<DeploymentStatus>,
+    pub network: Option<String>,
 }
