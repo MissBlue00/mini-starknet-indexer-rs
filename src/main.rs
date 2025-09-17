@@ -22,6 +22,7 @@ mod database;
 mod indexer;
 mod realtime;
 mod deployment_service;
+mod deployment_service_handler;
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]
@@ -567,6 +568,9 @@ async fn main() {
     let rpc = crate::starknet::RpcContext::from_env();
     let realtime_manager = Arc::new(crate::realtime::RealtimeEventManager::new());
     let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone(), realtime_manager.clone());
+    
+    // Create schema cache for deployment-specific schemas
+    let schema_cache = crate::deployment_service_handler::create_schema_cache();
 
     // Build our application with routes
     let app = Router::new()
@@ -575,13 +579,18 @@ async fn main() {
         .route("/get-abi/:contract_address", get(get_contract_abi_handler))
         .route("/sync-status", get(sync_status_handler))
         .route("/stats/:contract_address", get(indexer_stats_handler))
-        // GraphQL: POST for queries/mutations, GET for GraphiQL interface, separate WS endpoint for subscriptions
+        // Main GraphQL endpoints
         .route("/graphql", post_service(GraphQL::new(schema.clone())))
         .route("/graphql", get(graphiql_handler))
         .route("/ws", get_service(GraphQLSubscription::new(schema.clone())))
-        // GraphiQL UI (alternative endpoint)
         .route("/graphiql", get(graphiql_handler))
-        .with_state((database.clone(), rpc.clone()));
+        // Deployment-specific GraphQL endpoints
+        .route("/deployment/:deployment_id/graphql", post(crate::deployment_service_handler::deployment_graphql_post_handler))
+        .route("/deployment/:deployment_id/graphiql", get(crate::deployment_service_handler::deployment_graphiql_handler))
+        // Note: WebSocket routes for deployments would need more complex setup, skipping for now
+        // List all deployment endpoints
+        .route("/deployments/endpoints", get(crate::deployment_service_handler::list_deployment_endpoints))
+        .with_state((database.clone(), rpc.clone(), realtime_manager.clone(), schema_cache));
 
     // Start background indexer and server concurrently
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -632,7 +641,7 @@ async fn main() {
 }
 
 async fn sync_status_handler(
-    axum::extract::State((database, rpc)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext)>
+    axum::extract::State((database, rpc, _realtime_manager, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, crate::deployment_service_handler::SchemaCache)>
 ) -> Json<serde_json::Value> {
     use serde_json::json;
     
@@ -734,7 +743,7 @@ async fn sync_status_handler(
 }
 
 async fn indexer_stats_handler(
-    axum::extract::State((database, _rpc)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext)>,
+    axum::extract::State((database, _rpc, _realtime_manager, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, crate::deployment_service_handler::SchemaCache)>,
     Path(contract_address): Path<String>
 ) -> Json<serde_json::Value> {
     use serde_json::json;
