@@ -119,20 +119,22 @@ export default function PricingPage() {
   const calculateDiscountedPrice = (basePrice: number | string) => {
     if (typeof basePrice !== 'number') return basePrice;
     
-    const discounts = pricingData?.subscriptions.discounts;
-    if (!discounts) return basePrice;
-    
+    const discounts = pricingData?.subscriptions.discounts || {
+      quarterly: 0,
+      semiannual: 0,
+      annual: 0
+    };
     let discount = 0;
     
     switch (billingPeriod) {
       case 'quarterly':
-        discount = discounts.quarterly;
+        discount = discounts.quarterly || 0;
         break;
       case 'semiannual':
-        discount = discounts.semiannual;
+        discount = discounts.semiannual || 0;
         break;
       case 'annual':
-        discount = discounts.annual;
+        discount = discounts.annual || 0;
         break;
       default:
         discount = 0;
@@ -290,12 +292,15 @@ export default function PricingPage() {
               <div className="bg-white dark:bg-gray-800 p-1 rounded-lg shadow-lg">
                 {(['monthly', 'quarterly', 'semiannual', 'annual'] as BillingPeriod[]).map((period) => {
                   const getDiscountForPeriod = () => {
-                    const discounts = pricingData?.subscriptions.discounts;
-                    if (!discounts) return 0;
+                    const discounts = pricingData?.subscriptions.discounts || {
+                      quarterly: 0,
+                      semiannual: 0,
+                      annual: 0
+                    };
                     switch (period) {
-                      case 'quarterly': return discounts.quarterly * 100;
-                      case 'semiannual': return discounts.semiannual * 100;
-                      case 'annual': return discounts.annual * 100;
+                      case 'quarterly': return (discounts.quarterly || 0) * 100;
+                      case 'semiannual': return (discounts.semiannual || 0) * 100;
+                      case 'annual': return (discounts.annual || 0) * 100;
                       default: return 0;
                     }
                   };
