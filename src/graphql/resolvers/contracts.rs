@@ -49,7 +49,6 @@ impl ContractQueryRoot {
             verified: true,
         }))
     }
-    
 
     async fn contracts(&self, ctx: &Context<'_>, addresses: Vec<String>) -> GqlResult<Vec<Contract>> {
         let rpc = ctx.data::<RpcContext>()?.clone();
