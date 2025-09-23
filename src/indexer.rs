@@ -110,6 +110,63 @@ impl MultiContractIndexer {
             eprintln!("❌ No allow list configured for multi-contract indexer");
         }
     }
+
+    /// Start indexing all contracts for a specific deployment
+    pub async fn start_syncing_deployment(&self, deployment_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Get all contracts for this deployment
+        let contracts = self.database.get_deployment_contracts(deployment_id).await?;
+        
+        if contracts.is_empty() {
+            println!("⚠️  No contracts found for deployment {}", deployment_id);
+            return Ok(());
+        }
+
+        println!("🚀 Starting multi-contract indexer for deployment {} with {} contracts", deployment_id, contracts.len());
+        println!("⏱️  Staggering startup to avoid RPC rate limits...");
+        
+        // Start individual indexers for each contract with staggered delays
+        let mut handles = Vec::new();
+        
+        for (index, contract) in contracts.iter().enumerate() {
+            let database = self.database.clone();
+            let rpc = self.rpc.clone();
+            let config = self.config.clone();
+            let contract_address = contract.contract_address.clone();
+            let start_block = contract.start_block;
+            let realtime_manager = self.realtime_manager.clone();
+            
+            // Stagger startup by 2 seconds per contract to avoid rate limits
+            let delay_seconds = index as u64 * 2;
+            
+            let handle = tokio::spawn(async move {
+                // Wait before starting this indexer
+                if delay_seconds > 0 {
+                    println!("⏳ Starting indexer for {} in {} seconds...", contract_address, delay_seconds);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(delay_seconds)).await;
+                }
+                
+                // Create a custom config for this contract if it has a specific start block
+                let mut contract_config = config.clone();
+                if let Some(start_block) = start_block {
+                    contract_config.start_block = Some(start_block);
+                }
+                
+                let indexer = BlockchainIndexer::new(database, rpc, contract_address, Some(contract_config), realtime_manager);
+                indexer.start_syncing().await;
+            });
+            
+            handles.push(handle);
+        }
+        
+        // Wait for all indexers to complete (they should run indefinitely)
+        for handle in handles {
+            if let Err(e) = handle.await {
+                eprintln!("❌ Indexer task failed: {}", e);
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 impl BlockchainIndexer {

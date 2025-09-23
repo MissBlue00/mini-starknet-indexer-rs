@@ -124,7 +124,7 @@ export default function DeploymentSelector() {
             <strong>Selected:</strong> {endpoints.find(e => e.id === activeDeploymentId)?.name}
           </p>
           <p className="text-xs text-blue-600 mt-1">
-            All GraphQL queries will now use this deployment's data only.
+            All GraphQL queries will now use this deployment&apos;s data only.
           </p>
           
           {/* API Key Status */}

@@ -32,12 +32,26 @@ pub struct DeploymentRecord {
     pub name: String,
     pub description: Option<String>,
     pub database_url: String,
-    pub contract_address: Option<String>,
+    pub contract_address: Option<String>, // Legacy field - kept for backward compatibility
     pub network: String,
     pub status: String, // "active", "inactive", "error"
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub metadata: Option<String>, // JSON metadata
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentContract {
+    pub id: String,
+    pub deployment_id: String,
+    pub contract_address: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start_block: Option<u64>,
+    pub status: String, // "active", "inactive", "error"
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub metadata: Option<String>, // JSON metadata for contract-specific config
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +184,24 @@ impl Database {
             "#
         ).execute(&pool).await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS deployment_contracts (
+                id TEXT PRIMARY KEY,
+                deployment_id TEXT NOT NULL,
+                contract_address TEXT NOT NULL,
+                name TEXT,
+                description TEXT,
+                start_block INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                metadata TEXT,
+                FOREIGN KEY (deployment_id) REFERENCES deployments (id) ON DELETE CASCADE
+            )
+            "#
+        ).execute(&pool).await?;
+
         // API usage tracking tables
         sqlx::query(
             r#"
@@ -238,6 +270,16 @@ impl Database {
             .execute(&pool).await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_contract_address ON deployments(contract_address)")
+            .execute(&pool).await?;
+        
+        // Create indexes for deployment_contracts table
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployment_contracts_deployment_id ON deployment_contracts(deployment_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployment_contracts_contract_address ON deployment_contracts(contract_address)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployment_contracts_status ON deployment_contracts(status)")
             .execute(&pool).await?;
             
         // Create indexes for API keys table
@@ -1024,6 +1066,30 @@ impl Database {
         Ok(count)
     }
 
+    // Deployment Contract management methods
+    pub async fn create_deployment_contract(&self, contract: &DeploymentContract) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO deployment_contracts (id, deployment_id, contract_address, name, description, start_block, status, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&contract.id)
+        .bind(&contract.deployment_id)
+        .bind(&contract.contract_address)
+        .bind(&contract.name)
+        .bind(&contract.description)
+        .bind(contract.start_block.map(|b| b as i64))
+        .bind(&contract.status)
+        .bind(contract.created_at.to_rfc3339())
+        .bind(contract.updated_at.to_rfc3339())
+        .bind(&contract.metadata)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     // API Call and Contract Query tracking methods
     
     pub async fn insert_api_call(&self, api_call: &ApiCallRecord) -> Result<(), sqlx::Error> {
@@ -1241,6 +1307,69 @@ impl Database {
         Ok(())
     }
 
+    pub async fn get_deployment_contracts(&self, deployment_id: &str) -> Result<Vec<DeploymentContract>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, deployment_id, contract_address, name, description, start_block, status, created_at, updated_at, metadata 
+             FROM deployment_contracts WHERE deployment_id = ? ORDER BY created_at ASC"
+        )
+        .bind(deployment_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut contracts = Vec::new();
+        for row in rows {
+            contracts.push(DeploymentContract {
+                id: row.get("id"),
+                deployment_id: row.get("deployment_id"),
+                contract_address: row.get("contract_address"),
+                name: row.get("name"),
+                description: row.get("description"),
+                start_block: row.get::<Option<i64>, _>("start_block").map(|b| b as u64),
+                status: row.get("status"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                metadata: row.get("metadata"),
+            });
+        }
+
+        Ok(contracts)
+    }
+
+    pub async fn get_deployment_contract(&self, contract_id: &str) -> Result<Option<DeploymentContract>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, deployment_id, contract_address, name, description, start_block, status, created_at, updated_at, metadata 
+             FROM deployment_contracts WHERE id = ?"
+        )
+        .bind(contract_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(Some(DeploymentContract {
+                id: row.get("id"),
+                deployment_id: row.get("deployment_id"),
+                contract_address: row.get("contract_address"),
+                name: row.get("name"),
+                description: row.get("description"),
+                start_block: row.get::<Option<i64>, _>("start_block").map(|b| b as u64),
+                status: row.get("status"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                metadata: row.get("metadata"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get an API key by its hash
     pub async fn get_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKeyRecord>, sqlx::Error> {
         let row = sqlx::query(
@@ -1274,6 +1403,74 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn update_deployment_contract(&self, contract_id: &str, name: Option<&str>, description: Option<&str>, status: Option<&str>, start_block: Option<u64>, metadata: Option<&str>) -> Result<(), sqlx::Error> {
+        let now = Utc::now();
+        let mut updates = Vec::new();
+        let mut values: Vec<&str> = Vec::new();
+        
+        if let Some(n) = name {
+            updates.push("name = ?");
+            values.push(n);
+        }
+        if let Some(d) = description {
+            updates.push("description = ?");
+            values.push(d);
+        }
+        if let Some(s) = status {
+            updates.push("status = ?");
+            values.push(s);
+        }
+        if let Some(m) = metadata {
+            updates.push("metadata = ?");
+            values.push(m);
+        }
+        
+        if updates.is_empty() && start_block.is_none() {
+            return Ok(()); // Nothing to update
+        }
+        
+        if let Some(_sb) = start_block {
+            updates.push("start_block = ?");
+        }
+        
+        updates.push("updated_at = ?");
+        let now_str = now.to_rfc3339();
+        
+        let query = format!("UPDATE deployment_contracts SET {} WHERE id = ?", updates.join(", "));
+        
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+        if let Some(sb) = start_block {
+            sql_query = sql_query.bind(sb as i64);
+        }
+        sql_query = sql_query.bind(&now_str).bind(contract_id);
+        
+        sql_query.execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn delete_deployment_contract(&self, contract_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM deployment_contracts WHERE id = ?")
+            .bind(contract_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_contracts_by_deployment(&self, deployment_id: &str) -> Result<Vec<DeploymentContract>, sqlx::Error> {
+        self.get_deployment_contracts(deployment_id).await
+    }
+
+    pub async fn count_deployment_contracts(&self, deployment_id: &str) -> Result<i64, sqlx::Error> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deployment_contracts WHERE deployment_id = ?")
+            .bind(deployment_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
     }
 
     /// Get all API keys for a deployment

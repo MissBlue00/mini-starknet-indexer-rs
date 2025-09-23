@@ -6,17 +6,17 @@ use crate::billing::BillingService;
 use crate::graphql::resolvers::billing::BillingQueryRoot;
 use crate::graphql::resolvers::contracts::ContractQueryRoot;
 use crate::graphql::resolvers::events::EventQueryRoot;
-use crate::graphql::resolvers::deployments::{DeploymentQueryRoot, DeploymentMutationRoot};
+use crate::graphql::resolvers::deployments::{DeploymentQueryRoot, DeploymentMutationRoot, DeploymentContractQueryRoot, DeploymentContractMutationRoot};
 use crate::graphql::resolvers::api_keys::{ApiKeyQueryRoot, ApiKeyMutationRoot};
 use crate::graphql::resolvers::subscriptions::SubscriptionRoot;
 use crate::starknet::RpcContext;
 use crate::realtime::RealtimeEventManager;
 
 #[derive(MergedObject, Default)]
-pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot, BillingQueryRoot, ApiKeyQueryRoot);
+pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot, DeploymentContractQueryRoot, BillingQueryRoot, ApiKeyQueryRoot);
 
 #[derive(MergedObject, Default)]
-pub struct MutationRoot(DeploymentMutationRoot, ApiKeyMutationRoot);
+pub struct MutationRoot(DeploymentMutationRoot, DeploymentContractMutationRoot, ApiKeyMutationRoot);
 
 pub type AppSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
