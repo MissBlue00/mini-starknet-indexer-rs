@@ -5,20 +5,24 @@ use chrono::Utc;
 use tokio::fs;
 
 use crate::database::{Database, DeploymentRecord};
+use crate::api_key_service::ApiKeyService;
 
 /// Semi-mock deployment service for managing deployment databases
 pub struct DeploymentService {
     main_database: Arc<Database>,
     deployments_base_path: String,
+    api_key_service: Arc<ApiKeyService>,
 }
 
 impl DeploymentService {
     pub fn new(main_database: Arc<Database>, deployments_base_path: Option<String>) -> Self {
         let base_path = deployments_base_path.unwrap_or_else(|| "deployments".to_string());
+        let api_key_service = Arc::new(ApiKeyService::new(main_database.clone()));
         
         Self {
             main_database,
             deployments_base_path: base_path,
+            api_key_service,
         }
     }
 
@@ -69,7 +73,17 @@ impl DeploymentService {
         // Save deployment record to main database
         self.main_database.create_deployment(&deployment_record).await?;
 
+        // Generate a default API key for the deployment
+        let (api_key, _api_key_record) = self.api_key_service.create_api_key(
+            &deployment_record.id,
+            format!("{} - Default Key", deployment_record.name),
+            Some("Automatically generated API key for deployment access".to_string()),
+            Some(serde_json::json!({"read": true, "write": false})),
+        ).await?;
+
         println!("✅ Created deployment '{}' with database: {}", deployment_record.name, deployment_record.database_url);
+        println!("🔑 Generated API key: {}", api_key);
+        println!("⚠️  Please save this API key securely - it will not be shown again!");
 
         Ok(deployment_record)
     }
@@ -178,6 +192,41 @@ impl DeploymentService {
         } else {
             Ok(None)
         }
+    }
+
+    /// Get API keys for a deployment
+    pub async fn get_deployment_api_keys(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<crate::database::ApiKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
+        self.api_key_service.get_deployment_api_keys(deployment_id).await
+    }
+
+    /// Create a new API key for a deployment
+    pub async fn create_deployment_api_key(
+        &self,
+        deployment_id: &str,
+        name: String,
+        description: Option<String>,
+        permissions: Option<serde_json::Value>,
+    ) -> Result<(String, crate::database::ApiKeyRecord), Box<dyn std::error::Error + Send + Sync>> {
+        self.api_key_service.create_api_key(deployment_id, name, description, permissions).await
+    }
+
+    /// Deactivate an API key
+    pub async fn deactivate_api_key(
+        &self,
+        api_key_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.api_key_service.deactivate_api_key(api_key_id).await
+    }
+
+    /// Delete an API key
+    pub async fn delete_api_key(
+        &self,
+        api_key_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.api_key_service.delete_api_key(api_key_id).await
     }
 }
 

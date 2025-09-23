@@ -259,6 +259,22 @@ pub struct AddDeploymentContractInput {
     pub metadata: Option<serde_json::Value>,
 }
 
+// API Key types
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct ApiKey {
+    pub id: String,
+    pub deployment_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: serde_json::Value,
+    pub is_active: bool,
+    pub last_used: Option<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    // Note: We never return the actual key hash for security
+}
+
 #[derive(InputObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct UpdateDeploymentContractInput {
@@ -268,4 +284,45 @@ pub struct UpdateDeploymentContractInput {
     pub status: Option<DeploymentContractStatus>,
     pub start_block: Option<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct CreateApiKeyInput {
+    pub deployment_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct UpdateApiKeyInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub permissions: Option<serde_json::Value>,
+    pub is_active: Option<bool>,
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct CreateApiKeyResult {
+    pub api_key: String,
+    pub api_key_record: ApiKey,
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct ApiKeyConnection {
+    pub edges: Vec<ApiKeyEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct ApiKeyEdge {
+    pub node: ApiKey,
+    pub cursor: String,
 }

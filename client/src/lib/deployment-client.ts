@@ -15,22 +15,24 @@ export interface DeploymentEndpoint {
 }
 
 /**
- * Creates an Apollo Client for a specific deployment
+ * Creates an Apollo Client for a specific deployment with API key authentication
  * @param deploymentId - The deployment ID
+ * @param apiKey - The API key for authentication (required for deployment endpoints)
  * @param baseUrl - The base URL of the indexer service (default: http://localhost:3000)
  * @returns Apollo Client instance configured for the deployment
  */
-export function createDeploymentClient(deploymentId: string, baseUrl: string = 'http://localhost:3000') {
+export function createDeploymentClient(deploymentId: string, apiKey: string, baseUrl: string = 'http://localhost:3000') {
   const httpLink = createHttpLink({
     uri: `${baseUrl}/deployment/${deploymentId}/graphql`,
   });
 
-  // Add deployment context to headers
+  // Add deployment context and API key authentication to headers
   const contextLink = setContext((_, { headers }) => {
     return {
       headers: {
         ...headers,
         'x-deployment-id': deploymentId,
+        'Authorization': `Bearer ${apiKey}`,
       }
     };
   });
@@ -94,6 +96,7 @@ export function getDeploymentWebSocketUrl(deploymentId: string, baseUrl: string 
  */
 export class DeploymentClientManager {
   private clients: Map<string, ApolloClient<any>> = new Map();
+  private apiKeys: Map<string, string> = new Map(); // deploymentId -> apiKey mapping
   private baseUrl: string;
 
   constructor(baseUrl: string = 'http://localhost:3000') {
@@ -101,11 +104,31 @@ export class DeploymentClientManager {
   }
 
   /**
+   * Sets the API key for a deployment
+   */
+  setApiKey(deploymentId: string, apiKey: string): void {
+    this.apiKeys.set(deploymentId, apiKey);
+    // Remove existing client so it gets recreated with the new API key
+    this.removeClient(deploymentId);
+  }
+
+  /**
+   * Gets the API key for a deployment
+   */
+  getApiKey(deploymentId: string): string | undefined {
+    return this.apiKeys.get(deploymentId);
+  }
+
+  /**
    * Gets or creates a client for a specific deployment
    */
   getClient(deploymentId: string): ApolloClient<any> {
     if (!this.clients.has(deploymentId)) {
-      const client = createDeploymentClient(deploymentId, this.baseUrl);
+      const apiKey = this.apiKeys.get(deploymentId);
+      if (!apiKey) {
+        throw new Error(`No API key found for deployment ${deploymentId}. Please set an API key first using setApiKey().`);
+      }
+      const client = createDeploymentClient(deploymentId, apiKey, this.baseUrl);
       this.clients.set(deploymentId, client);
     }
     return this.clients.get(deploymentId)!;
@@ -120,16 +143,19 @@ export class DeploymentClientManager {
       client.stop();
       this.clients.delete(deploymentId);
     }
+    // Also remove the API key
+    this.apiKeys.delete(deploymentId);
   }
 
   /**
-   * Clears all cached clients
+   * Clears all cached clients and API keys
    */
   clearAll(): void {
     for (const client of this.clients.values()) {
       client.stop();
     }
     this.clients.clear();
+    this.apiKeys.clear();
   }
 
   /**

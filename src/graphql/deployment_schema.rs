@@ -6,6 +6,7 @@ use crate::graphql::resolvers::deployment_contracts::DeploymentContractQueryRoot
 use crate::graphql::resolvers::subscriptions::SubscriptionRoot;
 use crate::starknet::RpcContext;
 use crate::realtime::RealtimeEventManager;
+use crate::billing::BillingService;
 
 /// Deployment-specific query root that merges all deployment-specific resolvers
 #[derive(MergedObject, Default)]
@@ -18,7 +19,8 @@ pub type DeploymentSchema = Schema<DeploymentQueryRoot, async_graphql::EmptyMuta
 pub fn build_deployment_schema(
     deployment_context: DeploymentContext,
     rpc: RpcContext,
-    realtime_manager: Arc<RealtimeEventManager>
+    realtime_manager: Arc<RealtimeEventManager>,
+    billing_service: Arc<BillingService>
 ) -> DeploymentSchema {
     Schema::build(
         DeploymentQueryRoot::default(),
@@ -28,5 +30,6 @@ pub fn build_deployment_schema(
     .data(deployment_context)
     .data(rpc)
     .data(realtime_manager)
+    .data(billing_service)
     .finish()
 }

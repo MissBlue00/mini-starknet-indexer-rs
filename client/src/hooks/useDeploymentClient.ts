@@ -41,17 +41,28 @@ export function useDeploymentEndpoints(baseUrl?: string) {
 /**
  * Hook to get a deployment-specific Apollo client
  */
-export function useDeploymentClient(deploymentId: string | null, baseUrl?: string) {
+export function useDeploymentClient(deploymentId: string | null, apiKey?: string, baseUrl?: string) {
   const client = useMemo(() => {
     if (!deploymentId) return null;
-    return clientManager.getClient(deploymentId);
-  }, [deploymentId]);
+    
+    // Set API key if provided
+    if (apiKey) {
+      clientManager.setApiKey(deploymentId, apiKey);
+    }
+    
+    try {
+      return clientManager.getClient(deploymentId);
+    } catch (error) {
+      console.error(`Failed to get client for deployment ${deploymentId}:`, error);
+      return null;
+    }
+  }, [deploymentId, apiKey]);
 
   return client;
 }
 
 /**
- * Hook to manage multiple deployment clients
+ * Hook to manage multiple deployment clients with API key support
  */
 export function useDeploymentClientManager() {
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
@@ -64,8 +75,21 @@ export function useDeploymentClientManager() {
     setActiveDeploymentId(null);
   };
 
+  const setApiKey = (deploymentId: string, apiKey: string) => {
+    clientManager.setApiKey(deploymentId, apiKey);
+  };
+
+  const getApiKey = (deploymentId: string) => {
+    return clientManager.getApiKey(deploymentId);
+  };
+
   const getClient = (deploymentId: string) => {
-    return clientManager.getClient(deploymentId);
+    try {
+      return clientManager.getClient(deploymentId);
+    } catch (error) {
+      console.error(`Failed to get client for deployment ${deploymentId}:`, error);
+      return null;
+    }
   };
 
   const removeClient = (deploymentId: string) => {
@@ -76,7 +100,13 @@ export function useDeploymentClientManager() {
   };
 
   const activeClient = useMemo(() => {
-    return activeDeploymentId ? clientManager.getClient(activeDeploymentId) : null;
+    if (!activeDeploymentId) return null;
+    try {
+      return clientManager.getClient(activeDeploymentId);
+    } catch (error) {
+      console.error(`Failed to get active client for deployment ${activeDeploymentId}:`, error);
+      return null;
+    }
   }, [activeDeploymentId]);
 
   return {
@@ -84,6 +114,8 @@ export function useDeploymentClientManager() {
     activeClient,
     switchDeployment,
     clearDeployment,
+    setApiKey,
+    getApiKey,
     getClient,
     removeClient,
     cachedDeploymentIds: clientManager.getCachedDeploymentIds(),

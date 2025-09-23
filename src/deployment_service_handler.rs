@@ -12,6 +12,9 @@ use tokio::sync::RwLock;
 use crate::database::Database;
 use crate::starknet::RpcContext;
 use crate::realtime::RealtimeEventManager;
+use crate::billing::BillingService;
+use crate::api_key_service::ApiKeyService;
+use crate::auth_middleware::extract_api_key_from_headers;
 use crate::graphql::deployment_context::DeploymentContext;
 use crate::graphql::deployment_schema::{build_deployment_schema, DeploymentSchema};
 
@@ -29,6 +32,7 @@ pub async fn get_deployment_schema(
     database: Arc<Database>,
     rpc: RpcContext,
     realtime_manager: Arc<RealtimeEventManager>,
+    billing_service: Arc<BillingService>,
     cache: SchemaCache,
 ) -> Result<DeploymentSchema, StatusCode> {
     // Check cache first
@@ -50,7 +54,7 @@ pub async fn get_deployment_schema(
     let deployment_context = DeploymentContext::new(deployment, database);
     
     // Build deployment-specific schema
-    let schema = build_deployment_schema(deployment_context, rpc, realtime_manager);
+    let schema = build_deployment_schema(deployment_context, rpc, realtime_manager, billing_service);
     
     // Cache the schema
     {
@@ -64,10 +68,29 @@ pub async fn get_deployment_schema(
 /// Handler for deployment-specific GraphQL queries
 pub async fn deployment_graphql_post_handler(
     Path(deployment_id): Path<String>,
-    State((database, rpc, realtime_manager, cache)): State<(Arc<Database>, RpcContext, Arc<RealtimeEventManager>, SchemaCache)>,
+    headers: axum::http::HeaderMap,
+    State((database, rpc, realtime_manager, billing_service, cache, api_key_service)): State<(Arc<Database>, RpcContext, Arc<RealtimeEventManager>, Arc<BillingService>, SchemaCache, Arc<ApiKeyService>)>,
     Json(request): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let schema = match get_deployment_schema(&deployment_id, database, rpc, realtime_manager, cache).await {
+    // Extract and validate API key
+    let api_key = match extract_api_key_from_headers(&headers) {
+        Some(key) => key,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    // Validate the API key and ensure it belongs to this deployment
+    let _validated_deployment_id = match api_key_service.validate_api_key(&api_key).await {
+        Ok(Some(deployment_id_from_key)) => {
+            if deployment_id_from_key != deployment_id {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            deployment_id_from_key
+        },
+        Ok(None) => return Err(StatusCode::UNAUTHORIZED),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+
+    let schema = match get_deployment_schema(&deployment_id, database, rpc, realtime_manager, billing_service, cache).await {
         Ok(schema) => schema,
         Err(status) => return Err(status),
     };
@@ -101,7 +124,7 @@ pub async fn deployment_graphiql_handler(
 
 /// Handler to list all deployments with their GraphQL endpoints
 pub async fn list_deployment_endpoints(
-    State((database, _rpc, _realtime_manager, _cache)): State<(Arc<Database>, RpcContext, Arc<RealtimeEventManager>, SchemaCache)>,
+    State((database, _rpc, _realtime_manager, _billing_service, _cache, _api_key_service)): State<(Arc<Database>, RpcContext, Arc<RealtimeEventManager>, Arc<BillingService>, SchemaCache, Arc<ApiKeyService>)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let deployments = database.get_deployments(None, None, 100, 0).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
