@@ -112,12 +112,56 @@ pub struct Deployment {
     pub name: String,
     pub description: Option<String>,
     pub database_url: String,
-    pub contract_address: Option<String>,
+    pub contract_address: Option<String>, // Legacy field for backward compatibility
     pub network: String,
     pub status: DeploymentStatus,
     pub created_at: String,
     pub updated_at: String,
     pub metadata: Option<serde_json::Value>,
+    pub contracts: Option<Vec<DeploymentContract>>, // New multi-contract support
+}
+
+#[derive(SimpleObject, Clone)]
+#[graphql(rename_fields = "camelCase")]
+pub struct DeploymentContract {
+    pub id: String,
+    pub deployment_id: String,
+    pub contract_address: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start_block: Option<String>,
+    pub status: DeploymentContractStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum DeploymentContractStatus {
+    Active,
+    Inactive,
+    Error,
+}
+
+impl From<&str> for DeploymentContractStatus {
+    fn from(s: &str) -> Self {
+        match s {
+            "active" => DeploymentContractStatus::Active,
+            "inactive" => DeploymentContractStatus::Inactive,
+            "error" => DeploymentContractStatus::Error,
+            _ => DeploymentContractStatus::Inactive,
+        }
+    }
+}
+
+impl From<DeploymentContractStatus> for &'static str {
+    fn from(status: DeploymentContractStatus) -> Self {
+        match status {
+            DeploymentContractStatus::Active => "active",
+            DeploymentContractStatus::Inactive => "inactive",
+            DeploymentContractStatus::Error => "error",
+        }
+    }
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -170,7 +214,18 @@ pub struct CreateDeploymentInput {
     pub name: String,
     pub description: Option<String>,
     pub network: String,
-    pub contract_address: Option<String>,
+    pub contract_address: Option<String>, // Legacy field for backward compatibility
+    pub contracts: Option<Vec<CreateDeploymentContractInput>>, // New multi-contract support
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct CreateDeploymentContractInput {
+    pub contract_address: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start_block: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -190,4 +245,27 @@ pub struct UpdateDeploymentInput {
 pub struct DeploymentFilter {
     pub status: Option<DeploymentStatus>,
     pub network: Option<String>,
+}
+
+// Input types for deployment contract management
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct AddDeploymentContractInput {
+    pub deployment_id: String,
+    pub contract_address: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start_block: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct UpdateDeploymentContractInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<DeploymentContractStatus>,
+    pub start_block: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }

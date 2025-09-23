@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { useQuery } from '@apollo/client';
 import { useParams } from 'next/navigation';
 import { GET_EVENTS, GET_CONTRACT } from '@/lib/graphql/queries';
-import { Filter, Hash, Activity, Clock, TrendingUp, Copy, ExternalLink, Settings, ArrowLeft, BarChart3, Database, CheckCircle, XCircle, Code, Activity as ActivityIcon } from 'lucide-react';
+import { Filter, Hash, Activity, Clock, TrendingUp, Copy, ExternalLink, Settings, ArrowLeft, BarChart3, Database, CheckCircle, XCircle, Code, Activity as ActivityIcon, Plus } from 'lucide-react';
 import { clsx } from 'clsx';
 import Link from 'next/link';
+import DeploymentContractManager from '@/components/DeploymentContractManager';
 
 interface Event {
   id: string;
@@ -42,6 +43,7 @@ export default function DeploymentDetailPage() {
   });
 
   const [showFilters, setShowFilters] = useState(false);
+  const [activeTab, setActiveTab] = useState<'events' | 'contracts'>('events');
 
   // Query events for this specific contract
   const { data: eventsData, loading: eventsLoading, error: eventsError } = useQuery(GET_EVENTS, {
@@ -176,8 +178,49 @@ export default function DeploymentDetailPage() {
           </div>
         </div>
 
+        {/* Tab Navigation */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 mb-8">
+          <div className="flex items-center gap-1 bg-slate-800 rounded-lg p-1">
+            <button
+              onClick={() => setActiveTab('events')}
+              className={clsx(
+                "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                activeTab === 'events'
+                  ? "bg-slate-700 text-white"
+                  : "text-slate-400 hover:text-white"
+              )}
+            >
+              <Activity className="h-4 w-4" />
+              Events
+            </button>
+            <button
+              onClick={() => setActiveTab('contracts')}
+              className={clsx(
+                "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                activeTab === 'contracts'
+                  ? "bg-slate-700 text-white"
+                  : "text-slate-400 hover:text-white"
+              )}
+            >
+              <Plus className="h-4 w-4" />
+              Manage Contracts
+            </button>
+          </div>
+        </div>
+
+        {/* Contract Management Tab */}
+        {activeTab === 'contracts' && (
+          <div className="mb-8">
+            <DeploymentContractManager 
+              deploymentId={contractAddress} 
+              deploymentName={contract?.name || 'Contract Deployment'} 
+            />
+          </div>
+        )}
+
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        {activeTab === 'events' && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
             <div className="flex items-center justify-between mb-3">
               <div className="text-slate-400 text-sm font-medium">TOTAL EVENTS</div>
@@ -214,9 +257,11 @@ export default function DeploymentDetailPage() {
             <div className="text-slate-400 text-xs mt-1">Blocks covered</div>
           </div>
         </div>
+        )}
 
         {/* Filters Section */}
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 mb-8">
+        {activeTab === 'events' && (
+          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-white">Event Filters</h3>
             <button
@@ -289,9 +334,11 @@ export default function DeploymentDetailPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Events List */}
-        <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
+        {activeTab === 'events' && (
+          <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
           {/* Sidebar - Event Distribution */}
           <div className="xl:col-span-1 space-y-6">
             <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
@@ -422,6 +469,7 @@ export default function DeploymentDetailPage() {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

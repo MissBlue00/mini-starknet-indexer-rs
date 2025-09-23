@@ -4,16 +4,16 @@ use std::sync::Arc;
 use crate::database::Database;
 use crate::graphql::resolvers::contracts::ContractQueryRoot;
 use crate::graphql::resolvers::events::EventQueryRoot;
-use crate::graphql::resolvers::deployments::{DeploymentQueryRoot, DeploymentMutationRoot};
+use crate::graphql::resolvers::deployments::{DeploymentQueryRoot, DeploymentMutationRoot, DeploymentContractQueryRoot, DeploymentContractMutationRoot};
 use crate::graphql::resolvers::subscriptions::SubscriptionRoot;
 use crate::starknet::RpcContext;
 use crate::realtime::RealtimeEventManager;
 
 #[derive(MergedObject, Default)]
-pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot);
+pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot, DeploymentContractQueryRoot);
 
 #[derive(MergedObject, Default)]
-pub struct MutationRoot(DeploymentMutationRoot);
+pub struct MutationRoot(DeploymentMutationRoot, DeploymentContractMutationRoot);
 
 pub type AppSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
