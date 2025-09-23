@@ -569,6 +569,11 @@ async fn main() {
     // Initialize billing service
     let billing_service = Arc::new(crate::billing::BillingService::new(database.clone()));
     
+    // Initialize default CPU pricing tiers
+    if let Err(e) = billing_service.initialize_default_pricing_tiers().await {
+        eprintln!("Warning: Failed to initialize default pricing tiers: {}", e);
+    }
+    
     // Build GraphQL schema with database, real-time event manager, and billing service
     let rpc = crate::starknet::RpcContext::from_env();
     let realtime_manager = Arc::new(crate::realtime::RealtimeEventManager::new());

@@ -2,60 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { PaymentModal } from '../../components/PaymentModal';
-
-// Mock API function for pricing rates
-const fetchPricingRates = async () => {
-  // Simulate API call delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  return {
-    payAsYouGo: {
-      usdcPerRequest: 0.001, // $0.001 per request
-      minimumAmount: 10, // $10 minimum
-    },
-    subscriptions: {
-      plans: [
-        {
-          id: 'basic',
-          name: 'Basic',
-          requestsPerSecond: 10,
-          monthlyPrice: 29,
-          discount: 10,
-          description: 'Perfect for small projects and testing'
-        },
-        {
-          id: 'pro',
-          name: 'Professional',
-          requestsPerSecond: 100,
-          monthlyPrice: 149,
-          discount: 15,
-          description: 'Great for growing applications'
-        },
-        {
-          id: 'enterprise',
-          name: 'Enterprise',
-          requestsPerSecond: 1000,
-          monthlyPrice: 499,
-          discount: 20,
-          description: 'For high-traffic applications'
-        },
-        {
-          id: 'custom',
-          name: 'Custom',
-          requestsPerSecond: 'Unlimited',
-          monthlyPrice: 'Contact us',
-          discount: 0,
-          description: 'Tailored solutions for your needs'
-        }
-      ],
-      discounts: {
-        quarterly: 0.1, // 10% discount
-        semiannual: 0.15, // 15% discount
-        annual: 0.2, // 20% discount
-      }
-    }
-  };
-};
+import { cpuPricingApi, CpuPricingRates } from '../../lib/cpu-pricing-api';
 
 type BillingPeriod = 'monthly' | 'quarterly' | 'semiannual' | 'annual';
 type PricingMode = 'payAsYouGo' | 'subscription';
@@ -64,27 +11,7 @@ export default function PricingPage() {
   const [pricingMode, setPricingMode] = useState<PricingMode>('payAsYouGo');
   const [usdcAmount, setUsdcAmount] = useState<string>('100');
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly');
-  const [pricingData, setPricingData] = useState<{
-    payAsYouGo: {
-      usdcPerRequest: number;
-      minimumAmount: number;
-    };
-    subscriptions: {
-      plans: Array<{
-        id: string;
-        name: string;
-        requestsPerSecond: number | string;
-        monthlyPrice: number | string;
-        discount: number;
-        description: string;
-      }>;
-      discounts: {
-        quarterly: number;
-        semiannual: number;
-        annual: number;
-      };
-    };
-  } | null>(null);
+  const [pricingData, setPricingData] = useState<CpuPricingRates | null>(null);
   const [loading, setLoading] = useState(true);
   const [paymentModal, setPaymentModal] = useState<{
     isOpen: boolean;
@@ -99,7 +26,7 @@ export default function PricingPage() {
   useEffect(() => {
     const loadPricingData = async () => {
       try {
-        const data = await fetchPricingRates();
+        const data = await cpuPricingApi.fetchCpuPricingRates();
         setPricingData(data);
       } catch (error) {
         console.error('Failed to load pricing data:', error);
@@ -111,9 +38,9 @@ export default function PricingPage() {
     loadPricingData();
   }, []);
 
-  const calculateRequests = (amount: number) => {
+  const calculateCpuUnits = (amount: number) => {
     if (!pricingData) return 0;
-    return Math.floor(amount / pricingData.payAsYouGo.usdcPerRequest);
+    return Math.floor(amount / pricingData.payAsYouGo.usdcPerCpuUnit);
   };
 
   const calculateDiscountedPrice = (basePrice: number | string) => {
@@ -381,9 +308,9 @@ export default function PricingPage() {
 
                   <div className="space-y-4 mb-6">
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-600 dark:text-gray-300">Requests/second</span>
+                      <span className="text-gray-600 dark:text-gray-300">CPU units/second</span>
                       <span className="font-semibold text-gray-900 dark:text-white">
-                        {plan.requestsPerSecond}
+                        {plan.cpuUnitsPerSecond}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">

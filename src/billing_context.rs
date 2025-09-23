@@ -62,6 +62,20 @@ impl BillingContext {
         ).await
     }
 
+    pub async fn track_cpu_usage(
+        &self,
+        cpu_time_ms: i32,
+        memory_usage_mb: f64,
+        complexity_factor: f64,
+    ) -> Result<(), sqlx::Error> {
+        self.billing_service.track_cpu_usage(
+            &self.api_call_id,
+            cpu_time_ms,
+            memory_usage_mb,
+            complexity_factor,
+        ).await
+    }
+
     pub async fn track_multiple_contract_queries(
         &self,
         contract_addresses: Vec<String>,
