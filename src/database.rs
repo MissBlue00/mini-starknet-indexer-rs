@@ -64,6 +64,20 @@ pub struct ContractQueryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ApiKeyRecord {
+    pub id: String,
+    pub deployment_id: String,
+    pub key_hash: String, // Hashed version of the API key for storage
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: String, // JSON string of allowed operations
+    pub is_active: bool,
+    pub last_used: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CpuPricingTier {
     pub id: String,
     pub name: String,
@@ -187,6 +201,25 @@ impl Database {
             "#
         ).execute(&pool).await?;
 
+        // API keys table for deployment authentication
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                deployment_id TEXT NOT NULL,
+                key_hash TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT,
+                permissions TEXT NOT NULL DEFAULT '{"read": true, "write": false}',
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                last_used TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                FOREIGN KEY (deployment_id) REFERENCES deployments(id) ON DELETE CASCADE
+            )
+            "#
+        ).execute(&pool).await?;
+
         // Create indexes for fast queries
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract_block ON events(contract_address, block_number)")
             .execute(&pool).await?;
@@ -205,6 +238,16 @@ impl Database {
             .execute(&pool).await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_contract_address ON deployments(contract_address)")
+            .execute(&pool).await?;
+            
+        // Create indexes for API keys table
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_deployment_id ON api_keys(deployment_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active)")
             .execute(&pool).await?;
         
         // Create indexes for API usage tracking
@@ -1170,6 +1213,187 @@ impl Database {
         }
 
         Ok(stats)
+    }
+
+    // API Key Management Methods
+    
+    /// Create a new API key for a deployment
+    pub async fn create_api_key(&self, api_key: &ApiKeyRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO api_keys (id, deployment_id, key_hash, name, description, permissions, is_active, last_used, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&api_key.id)
+        .bind(&api_key.deployment_id)
+        .bind(&api_key.key_hash)
+        .bind(&api_key.name)
+        .bind(&api_key.description)
+        .bind(&api_key.permissions)
+        .bind(api_key.is_active)
+        .bind(api_key.last_used.map(|dt| dt.to_rfc3339()))
+        .bind(api_key.created_at.to_rfc3339())
+        .bind(api_key.expires_at.map(|dt| dt.to_rfc3339()))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get an API key by its hash
+    pub async fn get_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKeyRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, deployment_id, key_hash, name, description, permissions, is_active, last_used, created_at, expires_at
+            FROM api_keys
+            WHERE key_hash = ? AND is_active = 1
+            "#
+        )
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(Some(ApiKeyRecord {
+                id: row.get("id"),
+                deployment_id: row.get("deployment_id"),
+                key_hash: row.get("key_hash"),
+                name: row.get("name"),
+                description: row.get("description"),
+                permissions: row.get("permissions"),
+                is_active: row.get("is_active"),
+                last_used: row.get::<Option<String>, _>("last_used")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                expires_at: row.get::<Option<String>, _>("expires_at")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get all API keys for a deployment
+    pub async fn get_api_keys_for_deployment(&self, deployment_id: &str) -> Result<Vec<ApiKeyRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, deployment_id, key_hash, name, description, permissions, is_active, last_used, created_at, expires_at
+            FROM api_keys
+            WHERE deployment_id = ?
+            ORDER BY created_at DESC
+            "#
+        )
+        .bind(deployment_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut api_keys = Vec::new();
+        for row in rows {
+            api_keys.push(ApiKeyRecord {
+                id: row.get("id"),
+                deployment_id: row.get("deployment_id"),
+                key_hash: row.get("key_hash"),
+                name: row.get("name"),
+                description: row.get("description"),
+                permissions: row.get("permissions"),
+                is_active: row.get("is_active"),
+                last_used: row.get::<Option<String>, _>("last_used")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                expires_at: row.get::<Option<String>, _>("expires_at")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+            });
+        }
+
+        Ok(api_keys)
+    }
+
+    /// Update API key last used timestamp
+    pub async fn update_api_key_last_used(&self, api_key_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE api_keys
+            SET last_used = ?
+            WHERE id = ?
+            "#
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(api_key_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Deactivate an API key
+    pub async fn deactivate_api_key(&self, api_key_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE api_keys
+            SET is_active = 0
+            WHERE id = ?
+            "#
+        )
+        .bind(api_key_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete an API key
+    pub async fn delete_api_key(&self, api_key_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM api_keys
+            WHERE id = ?
+            "#
+        )
+        .bind(api_key_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get API key by ID (without hash for display purposes)
+    pub async fn get_api_key_by_id(&self, api_key_id: &str) -> Result<Option<ApiKeyRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, deployment_id, key_hash, name, description, permissions, is_active, last_used, created_at, expires_at
+            FROM api_keys
+            WHERE id = ?
+            "#
+        )
+        .bind(api_key_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(Some(ApiKeyRecord {
+                id: row.get("id"),
+                deployment_id: row.get("deployment_id"),
+                key_hash: row.get("key_hash"),
+                name: row.get("name"),
+                description: row.get("description"),
+                permissions: row.get("permissions"),
+                is_active: row.get("is_active"),
+                last_used: row.get::<Option<String>, _>("last_used")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                expires_at: row.get::<Option<String>, _>("expires_at")
+                    .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     // CPU Pricing Management Methods
