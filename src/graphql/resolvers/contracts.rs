@@ -1,8 +1,11 @@
 use async_graphql::{Context, Object, Result as GqlResult};
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::graphql::types::{Contract, EventInput, EventSchema};
 use crate::starknet::{get_contract_abi_string, RpcContext};
+use crate::billing::BillingService;
+use crate::billing_context::BillingContext;
 
 #[derive(Default)]
 pub struct ContractQueryRoot;
@@ -11,12 +14,33 @@ pub struct ContractQueryRoot;
 impl ContractQueryRoot {
     async fn contract(&self, ctx: &Context<'_>, address: String) -> GqlResult<Option<Contract>> {
         let rpc = ctx.data::<RpcContext>()?.clone();
+        let billing_service = ctx.data::<Arc<BillingService>>()?.clone();
+        
+        // Start tracking this API call
+        let billing_context = BillingContext::new(
+            None, // deployment_id
+            None, // user_id
+            "/graphql".to_string(),
+            "POST".to_string(),
+            billing_service.clone(),
+        );
+        
         let abi_str = match get_contract_abi_string(&rpc, &address).await {
             Ok(s) => s,
             Err(_) => return Ok(None),
         };
         let abi_val: Value = serde_json::from_str(&abi_str).unwrap_or(Value::Array(vec![]));
         let events = parse_event_schemas(&abi_val);
+        
+        // Track contract query
+        if let Err(e) = billing_context.track_contract_query(
+            address.clone(),
+            "contract_query".to_string(),
+            Some(0.001),
+        ).await {
+            eprintln!("Failed to track contract query: {}", e);
+        }
+        
         Ok(Some(Contract {
             address,
             abi: Some(abi_str),
@@ -28,14 +52,36 @@ impl ContractQueryRoot {
 
     async fn contracts(&self, ctx: &Context<'_>, addresses: Vec<String>) -> GqlResult<Vec<Contract>> {
         let rpc = ctx.data::<RpcContext>()?.clone();
+        let billing_service = ctx.data::<Arc<BillingService>>()?.clone();
+        
+        // Start tracking this API call
+        let billing_context = BillingContext::new(
+            None, // deployment_id
+            None, // user_id
+            "/graphql".to_string(),
+            "POST".to_string(),
+            billing_service.clone(),
+        );
+        
+        let addresses_clone = addresses.clone();
         let mut out = Vec::new();
         for addr in addresses {
             if let Ok(abi_str) = get_contract_abi_string(&rpc, &addr).await {
                 let abi_val: Value = serde_json::from_str(&abi_str).unwrap_or(Value::Array(vec![]));
                 let events = parse_event_schemas(&abi_val);
-                out.push(Contract { address: addr, abi: Some(abi_str), events, name: None, verified: true });
+                out.push(Contract { address: addr.clone(), abi: Some(abi_str), events, name: None, verified: true });
             }
         }
+        
+        // Track multiple contract queries
+        if let Err(e) = billing_context.track_multiple_contract_queries(
+            addresses_clone,
+            "contracts_query".to_string(),
+            Some(0.001),
+        ).await {
+            eprintln!("Failed to track contract queries: {}", e);
+        }
+        
         Ok(out)
     }
 
@@ -108,4 +154,5 @@ fn parse_event_schemas(abi: &Value) -> Vec<EventSchema> {
     }
     result
 }
+
 

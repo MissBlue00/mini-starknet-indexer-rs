@@ -16,6 +16,8 @@ use async_graphql_axum::{GraphQL, GraphQLSubscription};
 use clap::Parser;
 use url::Url;
 
+mod billing;
+mod billing_context;
 mod graphql;
 mod starknet;
 mod database;
@@ -564,10 +566,13 @@ async fn main() {
             .expect("Failed to initialize database")
     );
     
-    // Build GraphQL schema with database and real-time event manager
+    // Initialize billing service
+    let billing_service = Arc::new(crate::billing::BillingService::new(database.clone()));
+    
+    // Build GraphQL schema with database, real-time event manager, and billing service
     let rpc = crate::starknet::RpcContext::from_env();
     let realtime_manager = Arc::new(crate::realtime::RealtimeEventManager::new());
-    let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone(), realtime_manager.clone());
+    let schema = crate::graphql::schema::build_schema(rpc.clone(), database.clone(), realtime_manager.clone(), billing_service.clone());
     
     // Create schema cache for deployment-specific schemas
     let schema_cache = crate::deployment_service_handler::create_schema_cache();
@@ -590,7 +595,7 @@ async fn main() {
         // Note: WebSocket routes for deployments would need more complex setup, skipping for now
         // List all deployment endpoints
         .route("/deployments/endpoints", get(crate::deployment_service_handler::list_deployment_endpoints))
-        .with_state((database.clone(), rpc.clone(), realtime_manager.clone(), schema_cache));
+        .with_state((database.clone(), rpc.clone(), realtime_manager.clone(), billing_service.clone(), schema_cache));
 
     // Start background indexer and server concurrently
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -641,7 +646,7 @@ async fn main() {
 }
 
 async fn sync_status_handler(
-    axum::extract::State((database, rpc, _realtime_manager, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, crate::deployment_service_handler::SchemaCache)>
+    axum::extract::State((database, rpc, _realtime_manager, _billing_service, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache)>
 ) -> Json<serde_json::Value> {
     use serde_json::json;
     
@@ -743,7 +748,7 @@ async fn sync_status_handler(
 }
 
 async fn indexer_stats_handler(
-    axum::extract::State((database, _rpc, _realtime_manager, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, crate::deployment_service_handler::SchemaCache)>,
+    axum::extract::State((database, _rpc, _realtime_manager, _billing_service, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache)>,
     Path(contract_address): Path<String>
 ) -> Json<serde_json::Value> {
     use serde_json::json;

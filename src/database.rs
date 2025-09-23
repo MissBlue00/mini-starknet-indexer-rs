@@ -40,6 +40,29 @@ pub struct DeploymentRecord {
     pub metadata: Option<String>, // JSON metadata
 }
 
+#[derive(Debug, Clone)]
+pub struct ApiCallRecord {
+    pub id: String,
+    pub deployment_id: Option<String>,
+    pub user_id: Option<String>,
+    pub endpoint: String,
+    pub method: String,
+    pub timestamp: DateTime<Utc>,
+    pub duration_ms: Option<i64>,
+    pub status_code: Option<i32>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractQueryRecord {
+    pub id: String,
+    pub api_call_id: String,
+    pub contract_address: String,
+    pub query_type: String,
+    pub timestamp: DateTime<Utc>,
+    pub cost_usdc: f64,
+}
+
 pub struct Database {
     pub pool: SqlitePool,
 }
@@ -110,6 +133,37 @@ impl Database {
             "#
         ).execute(&pool).await?;
 
+        // API usage tracking tables
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS api_calls (
+                id TEXT PRIMARY KEY,
+                deployment_id TEXT,
+                user_id TEXT,
+                endpoint TEXT NOT NULL,
+                method TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                duration_ms INTEGER,
+                status_code INTEGER,
+                metadata TEXT
+            )
+            "#
+        ).execute(&pool).await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS contract_queries (
+                id TEXT PRIMARY KEY,
+                api_call_id TEXT NOT NULL,
+                contract_address TEXT NOT NULL,
+                query_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                cost_usdc REAL NOT NULL DEFAULT 0.001,
+                FOREIGN KEY (api_call_id) REFERENCES api_calls(id)
+            )
+            "#
+        ).execute(&pool).await?;
+
         // Create indexes for fast queries
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract_block ON events(contract_address, block_number)")
             .execute(&pool).await?;
@@ -128,6 +182,22 @@ impl Database {
             .execute(&pool).await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_contract_address ON deployments(contract_address)")
+            .execute(&pool).await?;
+        
+        // Create indexes for API usage tracking
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_calls_deployment_id ON api_calls(deployment_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_calls_timestamp ON api_calls(timestamp)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_api_call_id ON contract_queries(api_call_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_contract_address ON contract_queries(contract_address)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_timestamp ON contract_queries(timestamp)")
             .execute(&pool).await?;
 
         Ok(Database { pool })
@@ -845,5 +915,196 @@ impl Database {
         
         let count: i64 = sql_query.fetch_one(&self.pool).await?;
         Ok(count)
+    }
+
+    // API Call and Contract Query tracking methods
+    
+    pub async fn insert_api_call(&self, api_call: &ApiCallRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO api_calls (id, deployment_id, user_id, endpoint, method, timestamp, duration_ms, status_code, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&api_call.id)
+        .bind(&api_call.deployment_id)
+        .bind(&api_call.user_id)
+        .bind(&api_call.endpoint)
+        .bind(&api_call.method)
+        .bind(api_call.timestamp.to_rfc3339())
+        .bind(api_call.duration_ms)
+        .bind(api_call.status_code)
+        .bind(&api_call.metadata)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn insert_contract_query(&self, contract_query: &ContractQueryRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO contract_queries (id, api_call_id, contract_address, query_type, timestamp, cost_usdc)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&contract_query.id)
+        .bind(&contract_query.api_call_id)
+        .bind(&contract_query.contract_address)
+        .bind(&contract_query.query_type)
+        .bind(contract_query.timestamp.to_rfc3339())
+        .bind(contract_query.cost_usdc)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn get_api_call_usage_stats(
+        &self,
+        deployment_id: Option<&str>,
+        user_id: Option<&str>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT 
+                ac.id as api_call_id,
+                ac.endpoint,
+                ac.method,
+                ac.timestamp,
+                ac.duration_ms,
+                ac.status_code,
+                COUNT(cq.id) as contract_count,
+                SUM(cq.cost_usdc) as total_cost_usdc
+            FROM api_calls ac
+            LEFT JOIN contract_queries cq ON ac.id = cq.api_call_id
+            WHERE 1=1"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(dep_id) = deployment_id {
+            conditions.push("ac.deployment_id = ?");
+            values.push(dep_id.to_string());
+        }
+
+        if let Some(uid) = user_id {
+            conditions.push("ac.user_id = ?");
+            values.push(uid.to_string());
+        }
+
+        if let Some(from) = from_date {
+            conditions.push("ac.timestamp >= ?");
+            values.push(from.to_rfc3339());
+        }
+
+        if let Some(to) = to_date {
+            conditions.push("ac.timestamp <= ?");
+            values.push(to.to_rfc3339());
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" AND ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" GROUP BY ac.id, ac.endpoint, ac.method, ac.timestamp, ac.duration_ms, ac.status_code");
+        query.push_str(" ORDER BY ac.timestamp DESC");
+
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+
+        let rows = sql_query.fetch_all(&self.pool).await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(serde_json::json!({
+                "api_call_id": row.get::<String, _>("api_call_id"),
+                "endpoint": row.get::<String, _>("endpoint"),
+                "method": row.get::<String, _>("method"),
+                "timestamp": row.get::<String, _>("timestamp"),
+                "duration_ms": row.get::<Option<i64>, _>("duration_ms"),
+                "status_code": row.get::<Option<i32>, _>("status_code"),
+                "contract_count": row.get::<i64, _>("contract_count"),
+                "total_cost_usdc": row.get::<Option<f64>, _>("total_cost_usdc").unwrap_or(0.0)
+            }));
+        }
+
+        Ok(stats)
+    }
+
+    pub async fn get_contract_usage_stats(
+        &self,
+        contract_address: Option<&str>,
+        deployment_id: Option<&str>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT 
+                cq.contract_address,
+                cq.query_type,
+                COUNT(cq.id) as query_count,
+                SUM(cq.cost_usdc) as total_cost_usdc,
+                ac.deployment_id
+            FROM contract_queries cq
+            LEFT JOIN api_calls ac ON cq.api_call_id = ac.id
+            WHERE 1=1"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(contract) = contract_address {
+            conditions.push("cq.contract_address = ?");
+            values.push(contract.to_string());
+        }
+
+        if let Some(dep_id) = deployment_id {
+            conditions.push("ac.deployment_id = ?");
+            values.push(dep_id.to_string());
+        }
+
+        if let Some(from) = from_date {
+            conditions.push("cq.timestamp >= ?");
+            values.push(from.to_rfc3339());
+        }
+
+        if let Some(to) = to_date {
+            conditions.push("cq.timestamp <= ?");
+            values.push(to.to_rfc3339());
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" AND ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" GROUP BY cq.contract_address, cq.query_type, ac.deployment_id");
+        query.push_str(" ORDER BY total_cost_usdc DESC");
+
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+
+        let rows = sql_query.fetch_all(&self.pool).await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(serde_json::json!({
+                "contract_address": row.get::<String, _>("contract_address"),
+                "query_type": row.get::<String, _>("query_type"),
+                "query_count": row.get::<i64, _>("query_count"),
+                "total_cost_usdc": row.get::<f64, _>("total_cost_usdc"),
+                "deployment_id": row.get::<Option<String>, _>("deployment_id")
+            }));
+        }
+
+        Ok(stats)
     }
 }
