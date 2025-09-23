@@ -25,6 +25,8 @@ mod indexer;
 mod realtime;
 mod deployment_service;
 mod deployment_service_handler;
+mod api_key_service;
+mod auth_middleware;
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-starknet-indexer", version, about = "Mini Starknet Indexer with REST and GraphQL APIs", long_about = None)]
@@ -577,6 +579,9 @@ async fn main() {
     // Create schema cache for deployment-specific schemas
     let schema_cache = crate::deployment_service_handler::create_schema_cache();
 
+    // Initialize API key service
+    let api_key_service = Arc::new(crate::api_key_service::ApiKeyService::new(database.clone()));
+
     // Build our application with routes
     let app = Router::new()
         .route("/", post(fetch_starknet_events_handler))
@@ -589,13 +594,13 @@ async fn main() {
         .route("/graphql", get(graphiql_handler))
         .route("/ws", get_service(GraphQLSubscription::new(schema.clone())))
         .route("/graphiql", get(graphiql_handler))
-        // Deployment-specific GraphQL endpoints
+        // Deployment-specific GraphQL endpoints (require API key authentication)
         .route("/deployment/:deployment_id/graphql", post(crate::deployment_service_handler::deployment_graphql_post_handler))
         .route("/deployment/:deployment_id/graphiql", get(crate::deployment_service_handler::deployment_graphiql_handler))
         // Note: WebSocket routes for deployments would need more complex setup, skipping for now
         // List all deployment endpoints
         .route("/deployments/endpoints", get(crate::deployment_service_handler::list_deployment_endpoints))
-        .with_state((database.clone(), rpc.clone(), realtime_manager.clone(), billing_service.clone(), schema_cache));
+        .with_state((database.clone(), rpc.clone(), realtime_manager.clone(), billing_service.clone(), schema_cache, api_key_service.clone()));
 
     // Start background indexer and server concurrently
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -646,7 +651,7 @@ async fn main() {
 }
 
 async fn sync_status_handler(
-    axum::extract::State((database, rpc, _realtime_manager, _billing_service, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache)>
+    axum::extract::State((database, rpc, _realtime_manager, _billing_service, _cache, _api_key_service)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache, std::sync::Arc<crate::api_key_service::ApiKeyService>)>
 ) -> Json<serde_json::Value> {
     use serde_json::json;
     
@@ -748,7 +753,7 @@ async fn sync_status_handler(
 }
 
 async fn indexer_stats_handler(
-    axum::extract::State((database, _rpc, _realtime_manager, _billing_service, _cache)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache)>,
+    axum::extract::State((database, _rpc, _realtime_manager, _billing_service, _cache, _api_key_service)): axum::extract::State<(std::sync::Arc<crate::database::Database>, crate::starknet::RpcContext, std::sync::Arc<crate::realtime::RealtimeEventManager>, std::sync::Arc<crate::billing::BillingService>, crate::deployment_service_handler::SchemaCache, std::sync::Arc<crate::api_key_service::ApiKeyService>)>,
     Path(contract_address): Path<String>
 ) -> Json<serde_json::Value> {
     use serde_json::json;
