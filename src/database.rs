@@ -40,6 +40,52 @@ pub struct DeploymentRecord {
     pub metadata: Option<String>, // JSON metadata
 }
 
+#[derive(Debug, Clone)]
+pub struct ApiCallRecord {
+    pub id: String,
+    pub deployment_id: Option<String>,
+    pub user_id: Option<String>,
+    pub endpoint: String,
+    pub method: String,
+    pub timestamp: DateTime<Utc>,
+    pub duration_ms: Option<i64>,
+    pub status_code: Option<i32>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractQueryRecord {
+    pub id: String,
+    pub api_call_id: String,
+    pub contract_address: String,
+    pub query_type: String,
+    pub timestamp: DateTime<Utc>,
+    pub cost_usdc: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CpuPricingTier {
+    pub id: String,
+    pub name: String,
+    pub cpu_units_per_request: i32,
+    pub price_per_cpu_unit_usdc: f64,
+    pub minimum_charge_usdc: f64,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CpuUsageRecord {
+    pub id: String,
+    pub api_call_id: String,
+    pub cpu_units_used: i32,
+    pub cpu_time_ms: i32,
+    pub memory_usage_mb: f64,
+    pub cost_usdc: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
 pub struct Database {
     pub pool: SqlitePool,
 }
@@ -110,6 +156,37 @@ impl Database {
             "#
         ).execute(&pool).await?;
 
+        // API usage tracking tables
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS api_calls (
+                id TEXT PRIMARY KEY,
+                deployment_id TEXT,
+                user_id TEXT,
+                endpoint TEXT NOT NULL,
+                method TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                duration_ms INTEGER,
+                status_code INTEGER,
+                metadata TEXT
+            )
+            "#
+        ).execute(&pool).await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS contract_queries (
+                id TEXT PRIMARY KEY,
+                api_call_id TEXT NOT NULL,
+                contract_address TEXT NOT NULL,
+                query_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                cost_usdc REAL NOT NULL DEFAULT 0.001,
+                FOREIGN KEY (api_call_id) REFERENCES api_calls(id)
+            )
+            "#
+        ).execute(&pool).await?;
+
         // Create indexes for fast queries
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract_block ON events(contract_address, block_number)")
             .execute(&pool).await?;
@@ -128,6 +205,63 @@ impl Database {
             .execute(&pool).await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_deployments_contract_address ON deployments(contract_address)")
+            .execute(&pool).await?;
+        
+        // Create indexes for API usage tracking
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_calls_deployment_id ON api_calls(deployment_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_calls_timestamp ON api_calls(timestamp)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_api_call_id ON contract_queries(api_call_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_contract_address ON contract_queries(contract_address)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_contract_queries_timestamp ON contract_queries(timestamp)")
+            .execute(&pool).await?;
+
+        // CPU pricing configuration tables
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS cpu_pricing_tiers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                cpu_units_per_request INTEGER NOT NULL,
+                price_per_cpu_unit_usdc REAL NOT NULL,
+                minimum_charge_usdc REAL NOT NULL DEFAULT 0.001,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#
+        ).execute(&pool).await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS cpu_usage_records (
+                id TEXT PRIMARY KEY,
+                api_call_id TEXT NOT NULL,
+                cpu_units_used INTEGER NOT NULL,
+                cpu_time_ms INTEGER NOT NULL,
+                memory_usage_mb REAL NOT NULL,
+                cost_usdc REAL NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (api_call_id) REFERENCES api_calls(id)
+            )
+            "#
+        ).execute(&pool).await?;
+
+        // Create indexes for CPU pricing
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_cpu_pricing_tiers_active ON cpu_pricing_tiers(is_active)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_cpu_usage_records_api_call_id ON cpu_usage_records(api_call_id)")
+            .execute(&pool).await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_cpu_usage_records_timestamp ON cpu_usage_records(timestamp)")
             .execute(&pool).await?;
 
         Ok(Database { pool })
@@ -845,5 +979,373 @@ impl Database {
         
         let count: i64 = sql_query.fetch_one(&self.pool).await?;
         Ok(count)
+    }
+
+    // API Call and Contract Query tracking methods
+    
+    pub async fn insert_api_call(&self, api_call: &ApiCallRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO api_calls (id, deployment_id, user_id, endpoint, method, timestamp, duration_ms, status_code, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&api_call.id)
+        .bind(&api_call.deployment_id)
+        .bind(&api_call.user_id)
+        .bind(&api_call.endpoint)
+        .bind(&api_call.method)
+        .bind(api_call.timestamp.to_rfc3339())
+        .bind(api_call.duration_ms)
+        .bind(api_call.status_code)
+        .bind(&api_call.metadata)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn insert_contract_query(&self, contract_query: &ContractQueryRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO contract_queries (id, api_call_id, contract_address, query_type, timestamp, cost_usdc)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&contract_query.id)
+        .bind(&contract_query.api_call_id)
+        .bind(&contract_query.contract_address)
+        .bind(&contract_query.query_type)
+        .bind(contract_query.timestamp.to_rfc3339())
+        .bind(contract_query.cost_usdc)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn get_api_call_usage_stats(
+        &self,
+        deployment_id: Option<&str>,
+        user_id: Option<&str>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT 
+                ac.id as api_call_id,
+                ac.endpoint,
+                ac.method,
+                ac.timestamp,
+                ac.duration_ms,
+                ac.status_code,
+                COUNT(cq.id) as contract_count,
+                SUM(cq.cost_usdc) as total_cost_usdc
+            FROM api_calls ac
+            LEFT JOIN contract_queries cq ON ac.id = cq.api_call_id
+            WHERE 1=1"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(dep_id) = deployment_id {
+            conditions.push("ac.deployment_id = ?");
+            values.push(dep_id.to_string());
+        }
+
+        if let Some(uid) = user_id {
+            conditions.push("ac.user_id = ?");
+            values.push(uid.to_string());
+        }
+
+        if let Some(from) = from_date {
+            conditions.push("ac.timestamp >= ?");
+            values.push(from.to_rfc3339());
+        }
+
+        if let Some(to) = to_date {
+            conditions.push("ac.timestamp <= ?");
+            values.push(to.to_rfc3339());
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" AND ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" GROUP BY ac.id, ac.endpoint, ac.method, ac.timestamp, ac.duration_ms, ac.status_code");
+        query.push_str(" ORDER BY ac.timestamp DESC");
+
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+
+        let rows = sql_query.fetch_all(&self.pool).await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(serde_json::json!({
+                "api_call_id": row.get::<String, _>("api_call_id"),
+                "endpoint": row.get::<String, _>("endpoint"),
+                "method": row.get::<String, _>("method"),
+                "timestamp": row.get::<String, _>("timestamp"),
+                "duration_ms": row.get::<Option<i64>, _>("duration_ms"),
+                "status_code": row.get::<Option<i32>, _>("status_code"),
+                "contract_count": row.get::<i64, _>("contract_count"),
+                "total_cost_usdc": row.get::<Option<f64>, _>("total_cost_usdc").unwrap_or(0.0)
+            }));
+        }
+
+        Ok(stats)
+    }
+
+    pub async fn get_contract_usage_stats(
+        &self,
+        contract_address: Option<&str>,
+        deployment_id: Option<&str>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT 
+                cq.contract_address,
+                cq.query_type,
+                COUNT(cq.id) as query_count,
+                SUM(cq.cost_usdc) as total_cost_usdc,
+                ac.deployment_id
+            FROM contract_queries cq
+            LEFT JOIN api_calls ac ON cq.api_call_id = ac.id
+            WHERE 1=1"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(contract) = contract_address {
+            conditions.push("cq.contract_address = ?");
+            values.push(contract.to_string());
+        }
+
+        if let Some(dep_id) = deployment_id {
+            conditions.push("ac.deployment_id = ?");
+            values.push(dep_id.to_string());
+        }
+
+        if let Some(from) = from_date {
+            conditions.push("cq.timestamp >= ?");
+            values.push(from.to_rfc3339());
+        }
+
+        if let Some(to) = to_date {
+            conditions.push("cq.timestamp <= ?");
+            values.push(to.to_rfc3339());
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" AND ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" GROUP BY cq.contract_address, cq.query_type, ac.deployment_id");
+        query.push_str(" ORDER BY total_cost_usdc DESC");
+
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+
+        let rows = sql_query.fetch_all(&self.pool).await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(serde_json::json!({
+                "contract_address": row.get::<String, _>("contract_address"),
+                "query_type": row.get::<String, _>("query_type"),
+                "query_count": row.get::<i64, _>("query_count"),
+                "total_cost_usdc": row.get::<f64, _>("total_cost_usdc"),
+                "deployment_id": row.get::<Option<String>, _>("deployment_id")
+            }));
+        }
+
+        Ok(stats)
+    }
+
+    // CPU Pricing Management Methods
+    
+    pub async fn create_cpu_pricing_tier(&self, tier: &CpuPricingTier) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO cpu_pricing_tiers (id, name, cpu_units_per_request, price_per_cpu_unit_usdc, minimum_charge_usdc, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&tier.id)
+        .bind(&tier.name)
+        .bind(tier.cpu_units_per_request)
+        .bind(tier.price_per_cpu_unit_usdc)
+        .bind(tier.minimum_charge_usdc)
+        .bind(tier.is_active)
+        .bind(tier.created_at.to_rfc3339())
+        .bind(tier.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn get_cpu_pricing_tiers(&self, active_only: bool) -> Result<Vec<CpuPricingTier>, sqlx::Error> {
+        let query = if active_only {
+            "SELECT id, name, cpu_units_per_request, price_per_cpu_unit_usdc, minimum_charge_usdc, is_active, created_at, updated_at FROM cpu_pricing_tiers WHERE is_active = 1 ORDER BY cpu_units_per_request ASC"
+        } else {
+            "SELECT id, name, cpu_units_per_request, price_per_cpu_unit_usdc, minimum_charge_usdc, is_active, created_at, updated_at FROM cpu_pricing_tiers ORDER BY cpu_units_per_request ASC"
+        };
+        
+        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+        
+        let mut tiers = Vec::new();
+        for row in rows {
+            tiers.push(CpuPricingTier {
+                id: row.get("id"),
+                name: row.get("name"),
+                cpu_units_per_request: row.get("cpu_units_per_request"),
+                price_per_cpu_unit_usdc: row.get("price_per_cpu_unit_usdc"),
+                minimum_charge_usdc: row.get("minimum_charge_usdc"),
+                is_active: row.get("is_active"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+            });
+        }
+        
+        Ok(tiers)
+    }
+
+    pub async fn get_cpu_pricing_tier_by_cpu_units(&self, cpu_units: i32) -> Result<Option<CpuPricingTier>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, name, cpu_units_per_request, price_per_cpu_unit_usdc, minimum_charge_usdc, is_active, created_at, updated_at 
+             FROM cpu_pricing_tiers 
+             WHERE cpu_units_per_request >= ? AND is_active = 1 
+             ORDER BY cpu_units_per_request ASC 
+             LIMIT 1"
+        )
+        .bind(cpu_units)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(Some(CpuPricingTier {
+                id: row.get("id"),
+                name: row.get("name"),
+                cpu_units_per_request: row.get("cpu_units_per_request"),
+                price_per_cpu_unit_usdc: row.get("price_per_cpu_unit_usdc"),
+                minimum_charge_usdc: row.get("minimum_charge_usdc"),
+                is_active: row.get("is_active"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))
+                    .unwrap()
+                    .with_timezone(&Utc),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn insert_cpu_usage_record(&self, usage: &CpuUsageRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO cpu_usage_records (id, api_call_id, cpu_units_used, cpu_time_ms, memory_usage_mb, cost_usdc, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(&usage.id)
+        .bind(&usage.api_call_id)
+        .bind(usage.cpu_units_used)
+        .bind(usage.cpu_time_ms)
+        .bind(usage.memory_usage_mb)
+        .bind(usage.cost_usdc)
+        .bind(usage.timestamp.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
+    pub async fn get_cpu_usage_stats(
+        &self,
+        deployment_id: Option<&str>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT 
+                cur.api_call_id,
+                cur.cpu_units_used,
+                cur.cpu_time_ms,
+                cur.memory_usage_mb,
+                cur.cost_usdc,
+                cur.timestamp,
+                ac.deployment_id,
+                ac.endpoint,
+                ac.method
+            FROM cpu_usage_records cur
+            LEFT JOIN api_calls ac ON cur.api_call_id = ac.id
+            WHERE 1=1"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(dep_id) = deployment_id {
+            conditions.push("ac.deployment_id = ?");
+            values.push(dep_id.to_string());
+        }
+
+        if let Some(from) = from_date {
+            conditions.push("cur.timestamp >= ?");
+            values.push(from.to_rfc3339());
+        }
+
+        if let Some(to) = to_date {
+            conditions.push("cur.timestamp <= ?");
+            values.push(to.to_rfc3339());
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" AND ");
+            query.push_str(&conditions.join(" AND "));
+        }
+
+        query.push_str(" ORDER BY cur.timestamp DESC");
+
+        let mut sql_query = sqlx::query(&query);
+        for value in values {
+            sql_query = sql_query.bind(value);
+        }
+
+        let rows = sql_query.fetch_all(&self.pool).await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(serde_json::json!({
+                "api_call_id": row.get::<String, _>("api_call_id"),
+                "cpu_units_used": row.get::<i32, _>("cpu_units_used"),
+                "cpu_time_ms": row.get::<i32, _>("cpu_time_ms"),
+                "memory_usage_mb": row.get::<f64, _>("memory_usage_mb"),
+                "cost_usdc": row.get::<f64, _>("cost_usdc"),
+                "timestamp": row.get::<String, _>("timestamp"),
+                "deployment_id": row.get::<Option<String>, _>("deployment_id"),
+                "endpoint": row.get::<String, _>("endpoint"),
+                "method": row.get::<String, _>("method")
+            }));
+        }
+
+        Ok(stats)
     }
 }

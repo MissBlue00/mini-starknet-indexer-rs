@@ -2,6 +2,8 @@ use async_graphql::{Context, Object, Result as GqlResult};
 use std::sync::Arc;
 
 use crate::database::Database;
+use crate::billing::BillingService;
+use crate::billing_context::BillingContext;
 use crate::graphql::types::{Event, EventConnection, EventEdge, PageInfo};
 
 fn convert_felt_to_string(felt_hex: &str) -> serde_json::Value {
@@ -164,10 +166,20 @@ impl EventQueryRoot {
         #[graphql(name = "orderBy")] order_by: Option<crate::graphql::types::EventOrderBy>,
     ) -> GqlResult<EventConnection> {
         let database = ctx.data::<Arc<Database>>()?.clone();
+        let billing_service = ctx.data::<Arc<BillingService>>()?.clone();
         let limit = first.unwrap_or(10).clamp(1, 100);
         let offset = after.as_ref()
             .and_then(|cursor| cursor.parse::<i32>().ok())
             .unwrap_or(0);
+
+        // Start tracking this API call
+        let billing_context = BillingContext::new(
+            None, // deployment_id - will be None for main GraphQL endpoint
+            None, // user_id - could be extracted from headers/auth
+            "/graphql".to_string(),
+            "POST".to_string(),
+            billing_service.clone(),
+        );
 
         // Determine which contracts to query
         let target_contracts = if let Some(addresses) = contract_addresses {
@@ -219,6 +231,15 @@ impl EventQueryRoot {
             
             total_count += contract_total_count;
             all_events.extend(db_events);
+        }
+
+        // Track contract queries for billing
+        if let Err(e) = billing_context.track_multiple_contract_queries(
+            target_contracts.clone(),
+            "events_query".to_string(),
+            Some(0.001), // Cost per contract query
+        ).await {
+            eprintln!("Failed to track contract queries: {}", e);
         }
 
         // Sort all events by the specified order (default: newest first)

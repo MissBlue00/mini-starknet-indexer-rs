@@ -1,3 +1,4 @@
+pub mod billing;
 pub mod events;
 pub mod contracts;
 pub mod subscriptions;

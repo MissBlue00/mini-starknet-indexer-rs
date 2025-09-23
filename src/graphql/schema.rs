@@ -2,6 +2,8 @@ use async_graphql::{MergedObject, Schema};
 use std::sync::Arc;
 
 use crate::database::Database;
+use crate::billing::BillingService;
+use crate::graphql::resolvers::billing::BillingQueryRoot;
 use crate::graphql::resolvers::contracts::ContractQueryRoot;
 use crate::graphql::resolvers::events::EventQueryRoot;
 use crate::graphql::resolvers::deployments::{DeploymentQueryRoot, DeploymentMutationRoot};
@@ -10,18 +12,19 @@ use crate::starknet::RpcContext;
 use crate::realtime::RealtimeEventManager;
 
 #[derive(MergedObject, Default)]
-pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot);
+pub struct QueryRoot(EventQueryRoot, ContractQueryRoot, DeploymentQueryRoot, BillingQueryRoot);
 
 #[derive(MergedObject, Default)]
 pub struct MutationRoot(DeploymentMutationRoot);
 
 pub type AppSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
-pub fn build_schema(rpc: RpcContext, database: Arc<Database>, realtime_manager: Arc<RealtimeEventManager>) -> AppSchema {
+pub fn build_schema(rpc: RpcContext, database: Arc<Database>, realtime_manager: Arc<RealtimeEventManager>, billing_service: Arc<BillingService>) -> AppSchema {
     Schema::build(QueryRoot::default(), MutationRoot::default(), SubscriptionRoot)
         .data(rpc)
         .data(database)
         .data(realtime_manager)
+        .data(billing_service)
         .finish()
 }
 
